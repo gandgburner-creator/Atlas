@@ -1,0 +1,90 @@
+@import 'tailwindcss';
+
+/*
+ * See src/design/tokens.ts for what these are and where they came from.
+ * Keep the two files in step.
+ */
+@theme {
+  --color-ink: #23201b;
+  --color-ink-soft: #6b6459;
+  --color-ink-faint: #a89f92;
+  --color-paper: #faf7f0;
+  --color-paper-edge: #efe9dc;
+  --color-target: #7d8aa1;
+  --color-actual: #2f5d50;
+
+  /*
+   * One family, system-native so it renders with no network. Digits are
+   * never handwritten — see .tnum below.
+   */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI',
+    Roboto, sans-serif;
+}
+
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  /* Standalone PWA on iPhone: don't let the page rubber-band. */
+  overscroll-behavior-y: none;
+}
+
+/*
+ * Every numeral in the app. Tabular figures so 09:30 and 11:00 occupy the
+ * same width and a column of times lines up on the colon.
+ */
+.tnum {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+  letter-spacing: -0.01em;
+}
+
+/* Small letterspaced label — the sketchbook's margin annotations. */
+.annot {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-ink-soft);
+}
+
+/*
+ * iOS zooms the page when a focused input's text is under 16px. Every input
+ * in Atlas is at least 16px for that reason alone.
+ */
+input,
+textarea,
+button,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+input[type='time'],
+input[type='date'] {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Safe-area padding for the home indicator when installed. */
+.pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+.pt-safe {
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

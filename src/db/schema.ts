@@ -1,0 +1,150 @@
+import Dexie, { type EntityTable } from 'dexie';
+
+/**
+ * Atlas storage.
+ *
+ * The whole app's schema is declared here, not just the slice that's built.
+ * Adding a table later is a version bump and a migration; declaring them all
+ * up front costs nothing (empty stores are free) and means the sleep slice
+ * doesn't have to be the thing that dictates the shape of everything else.
+ *
+ * Every table stores RAW observations. Week numbers, wake targets, averages,
+ * calorie totals, 1RM estimates — all derived at read time, never persisted.
+ * The ramp will change; derived values written to disk would be lies later.
+ *
+ * `date` is a local calendar day, 'YYYY-MM-DD'. Clock times are local
+ * 'HH:MM'. Neither is a UTC instant: "I woke at 07:00" stays 07:00 across a
+ * timezone change, which is what a person means. `focusSessions` is the
+ * exception — a session is a real interval, so it stores epoch millis.
+ */
+
+/** Local calendar day, 'YYYY-MM-DD'. */
+export type ISODate = string;
+
+/** Local wall-clock time, 'HH:MM', 24h. */
+export type ClockTime = string;
+
+// ── Slice 1: sleep ────────────────────────────────────────────────────────
+
+export interface SleepLog {
+  /** Primary key. The day you woke up. */
+  date: ISODate;
+  /**
+   * The target in force when this was logged, snapshotted for history.
+   * Display and charts re-derive from the ramp instead of trusting this,
+   * so editing the ramp retroactively fixes the whole chart.
+   */
+  targetWake: ClockTime;
+  actualWake: ClockTime;
+  /** Estimated, optional. May be after midnight (02:00 = same calendar day). */
+  sleepOnset?: ClockTime;
+  /** "what happened today" — one line, free text. */
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ── Later slices: declared, unused ────────────────────────────────────────
+
+export interface WeightLog {
+  date: ISODate;
+  kg: number;
+}
+
+export interface FoodLog {
+  id?: number;
+  date: ISODate;
+  /** Reference into a food library added in a later slice. */
+  itemId: string;
+  quantity: number;
+  kcal: number;
+  protein: number;
+  fat: number;
+  carbs: number;
+}
+
+export interface WorkoutSet {
+  reps: number;
+  weight: number;
+}
+
+export interface WorkoutExercise {
+  name: string;
+  sets: WorkoutSet[];
+}
+
+export interface Workout {
+  id?: number;
+  date: ISODate;
+  /** e.g. 'push' | 'pull' | 'legs' — defined by config.splitDefinition. */
+  sessionType: string;
+  exercises: WorkoutExercise[];
+}
+
+export interface FocusSession {
+  id?: number;
+  /** Epoch millis — a session is an instant-anchored interval, not a day. */
+  start: number;
+  end: number;
+  intent: string;
+  tag: string;
+  /** 1–5. */
+  satisfaction: number;
+  completed: boolean;
+}
+
+export interface LifeLog {
+  date: ISODate;
+  restBlock: boolean;
+  call: boolean;
+  social: boolean;
+}
+
+export interface Photo {
+  id?: number;
+  date: ISODate;
+  /** e.g. 'progress' | 'meal'. */
+  type: string;
+  blob: Blob;
+}
+
+// ── Config ────────────────────────────────────────────────────────────────
+
+/**
+ * Key/value rather than columns: config keys arrive one slice at a time
+ * (calorieTarget, splitDefinition, currentPhase...) and a KV store absorbs
+ * each one without a schema version bump. `value` is typed per key by the
+ * accessors in ./config.ts, which are the only sanctioned way in.
+ */
+export interface ConfigEntry {
+  key: string;
+  value: unknown;
+}
+
+export class AtlasDB extends Dexie {
+  sleepLogs!: EntityTable<SleepLog, 'date'>;
+  weightLogs!: EntityTable<WeightLog, 'date'>;
+  foodLogs!: EntityTable<FoodLog, 'id'>;
+  workouts!: EntityTable<Workout, 'id'>;
+  focusSessions!: EntityTable<FocusSession, 'id'>;
+  lifeLogs!: EntityTable<LifeLog, 'date'>;
+  photos!: EntityTable<Photo, 'id'>;
+  config!: EntityTable<ConfigEntry, 'key'>;
+
+  constructor() {
+    super('atlas');
+    // Indexes are for what gets queried: a day, or a range of days.
+    this.version(1).stores({
+      sleepLogs: 'date',
+      weightLogs: 'date',
+      foodLogs: '++id, date, itemId',
+      workouts: '++id, date, sessionType',
+      focusSessions: '++id, start, tag',
+      lifeLogs: 'date',
+      photos: '++id, date, type',
+      config: 'key',
+    });
+  }
+}
+
+export const db = new AtlasDB();
