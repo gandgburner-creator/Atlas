@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
+import { TimeField } from '../components/TimeField';
 import {
   getCalorieTarget,
   getCommitmentOverrides,
@@ -313,6 +314,13 @@ function TargetsEditor({
 
 // ── Sleep ramp ────────────────────────────────────────────────────────────
 
+/**
+ * The sleep schedule, fully editable: when it starts, the wake time for
+ * every week, and how many weeks there are. Wake times are stored as a
+ * definition (src/domain/ramp.ts), so changing a step here re-derives every
+ * past and future target — including history already on the chart. Raw
+ * sleep logs are never touched; only the target line moves.
+ */
 function RampEditor({
   ramp,
   onRampChange,
@@ -321,20 +329,33 @@ function RampEditor({
   onRampChange: (r: RampConfig) => void;
 }) {
   const [start, setStart] = useState(ramp.startDate);
+  const [baseline, setBaseline] = useState(ramp.baselineWake);
+  const [steps, setSteps] = useState(ramp.steps);
+
+  const dirty =
+    start !== ramp.startDate ||
+    baseline !== ramp.baselineWake ||
+    steps.join(',') !== ramp.steps.join(',');
 
   async function save() {
-    const next = { ...ramp, startDate: start };
+    const next: RampConfig = { ...ramp, startDate: start, baselineWake: baseline, steps };
     await saveRamp(next);
     onRampChange(next);
   }
 
+  function setStep(i: number, value: string) {
+    setSteps(steps.map((s, j) => (j === i ? value : s)));
+  }
+
   return (
     <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
-      <span className="hand text-[26px]">the ramp</span>
+      <span className="hand text-[26px]">the sleep schedule</span>
       <p className="caption mt-0.5">
-        Moving the start date re-derives every week number and wake target —
-        history included. Raw logs never change.
+        This is the plan behind the wake-time screen. Change any week's
+        target, add or remove weeks, or move the start date — history
+        redraws to match, the raw logs never change.
       </p>
+
       <label className="mt-3 flex flex-col gap-1.5">
         <span className="hand text-[21px] text-[var(--ink-muted)]">week 1 begins</span>
         <input
@@ -345,13 +366,45 @@ function RampEditor({
           style={{ border: '2.2px solid var(--ink)', borderRadius: 4 }}
         />
       </label>
-      <Button
-        variant="secondary"
-        className="mt-3 w-full"
-        onClick={save}
-        disabled={start === ramp.startDate}
-      >
-        Move the start
+
+      <div className="mt-4">
+        <TimeField label="before the ramp" value={baseline} onChange={setBaseline} />
+      </div>
+
+      <div className="mt-4 flex flex-col gap-2">
+        <span className="annot">weekly wake targets</span>
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className="annot w-14 shrink-0">wk {i + 1}</span>
+            <div className="relative flex h-11 flex-1 items-center px-3">
+              <SketchBorder radius={4} strokeWidth={1.8} stroke="var(--rule)" />
+              <input
+                type="time"
+                value={step}
+                onChange={(e) => setStep(i, e.target.value)}
+                className="tnum relative w-full bg-transparent text-[16px] font-semibold outline-none"
+              />
+            </div>
+            <button
+              onClick={() => setSteps(steps.filter((_, j) => j !== i))}
+              disabled={steps.length <= 1}
+              aria-label={`remove week ${i + 1}`}
+              className="hand h-11 px-2 text-[19px] text-[var(--ink-muted)] disabled:opacity-30"
+            >
+              drop
+            </button>
+          </div>
+        ))}
+        <Button
+          variant="secondary"
+          onClick={() => setSteps([...steps, steps[steps.length - 1] ?? baseline])}
+        >
+          Add a week
+        </Button>
+      </div>
+
+      <Button className="mt-4 w-full" onClick={save} disabled={!dirty}>
+        Save the schedule
       </Button>
     </SketchCard>
   );
