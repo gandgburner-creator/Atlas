@@ -3,10 +3,56 @@
 Personal tracking. Offline-first, local-only, no backend and no auth. Nothing
 leaves the phone.
 
-**Slice 1 tracks one thing: wake time.** Wake time is the anchor and bedtime
-follows it. The ramp shifts the target 30 minutes earlier each week for six
-weeks — 09:30, 09:00, 08:30, 08:00, 07:30, 07:00 — starting from whatever date
-you give it on first run.
+Four sections — **Body, Work, Craft, Life** — over one commitment engine.
+Every module is a *capability*: fully built and always loggable from day one.
+A *commitment* is a capability that currently counts — toward the home-screen
+rings, on the today checklist. Commitments ramp in on a schedule of weeks
+(wake time, training and weigh-ins from week 1; nutrition week 3; rest blocks
+and calls week 5; focus hours week 7; craft hours week 10), and every one can
+be moved, activated early, or disabled from Settings. The plan is data, never
+code.
+
+## The pieces
+
+- **Home (Today)** — four hand-drawn status rings and the day's checklist,
+  everything one tap from launch. A section with no active commitments greys
+  out: visible, uncounted, never a failure.
+- **Sleep** — the original slice, untouched. Wake time is the anchor.
+- **Training** — the split is a queue with a pointer
+  (`back · shoulders · rest · legs · chest · rest`), never a calendar. The
+  pointer advances only on a completed session or a passed rest day; a
+  skipped day just means the same session is next tomorrow. Partial sessions
+  are complete sessions. Logging leads with LAST TIME, one tap pre-fills it;
+  rest timer survives backgrounding; pause excludes days instead of missing
+  them. Legs is squats and RDL only — knee history — and that is a rule, not
+  an oversight.
+- **Weight** — headline is the 7-day rolling average (dailies are noise,
+  especially back on creatine); chart plots the average against a dashed
+  plan line to 90 kg with milestone ticks at 97/95/93/91.
+- **Composition figure** — twelve ink studies from 25% down to 14%, chosen
+  from the rolling average and shared lean mass, crossfading between stages.
+  Tap it for the projection: two figures side by side, one slider in two
+  units, a dated timeline from the observed rate (or the plan rate, labelled,
+  when the data is too thin), and a pinnable target that renders as a quiet
+  ghost. If the estimate rises the figure transitions just as smoothly and
+  says nothing.
+- **InBody** — six core numbers required, everything else collapsible, a
+  photo of the printout stored alongside. The latest fat-free mass drives
+  the figure everywhere.
+- **Work / Craft** — a count-up session timer (intent, tag, felt 1–5,
+  done?) that survives backgrounding; craft adds the
+  idea › scripted › filmed › edited › published pipeline.
+- **Life** — three tap-toggles: rest block, call someone, social. No streaks
+  to break, here or anywhere.
+- **Progress** — the sleep ramp chart, the weight chart, this week's counts,
+  and the letter: a few lines to yourself at the end of the week, never
+  graded.
+
+## The sleep slice
+
+Wake time is the anchor and bedtime follows it. The ramp shifts the target 30
+minutes earlier each week for six weeks — 09:30 → 07:00 — from the start date
+given on first run.
 
 ## Running it
 
