@@ -1,57 +1,201 @@
 @import 'tailwindcss';
 
 /*
- * See src/design/tokens.ts for what these are and where they came from.
- * Keep the two files in step.
+ * Fonts are self-hosted, not fetched from Google. The app has to open in
+ * airplane mode, and a webfont that arrives over the network is a webfont
+ * that doesn't arrive. Subsets and unicode-ranges match what fonts.googleapis
+ * serves for Caveat 400..700 and Outfit 300..800.
  */
-@theme {
-  --color-ink: #23201b;
-  --color-ink-soft: #6b6459;
-  --color-ink-faint: #a89f92;
-  --color-paper: #faf7f0;
-  --color-paper-edge: #efe9dc;
-  --color-target: #7d8aa1;
-  --color-actual: #2f5d50;
+@font-face {
+  font-family: 'Caveat';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/caveat-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Caveat';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/caveat-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('/fonts/outfit-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+    U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+    U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('/fonts/outfit-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+    U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+    U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
 
-  /*
-   * One family, system-native so it renders with no network. Digits are
-   * never handwritten — see .tnum below.
-   */
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', 'Segoe UI',
-    Roboto, sans-serif;
+/* Atlas Sketchbook Atoms v1 · section 08. Mirror of src/design/tokens.ts. */
+@theme {
+  --color-desk: #ede5d6;
+  --color-paper: #fbf6ea;
+  --color-paper-sunk: #e3d9c6;
+  --color-ink: #17130e;
+  --color-ink-muted: #5a4e3e;
+  --color-ink-faint: #8e7f69;
+  --color-pencil: #b5a68e;
+  --color-grid: #c9bca4;
+  --color-ink-on-dark: #f7f1e2;
+
+  --color-accent: #c4452e;
+  --color-success: #2f6b3c;
+  --color-success-wash: #e7f0e4;
+
+  --color-night-board: #211b15;
+  --color-night-card: #2c251e;
+  --color-cream: #f4ebd9;
+  --color-cream-muted: #bfae95;
+
+  --font-hand: 'Caveat', cursive;
+  --font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+
+  /* Targets: button 52 · input 56 · min hit 48. */
+  --spacing-btn: 52px;
+  --spacing-field: 56px;
+}
+
+/*
+ * Night paper. Cream ink on a toned board, never white on black — the
+ * palette swaps, the ink weights don't.
+ */
+:root {
+  --paper: var(--color-paper);
+  --board: var(--color-desk);
+  --ink: var(--color-ink);
+  --ink-muted: var(--color-ink-muted);
+  --ink-faint: var(--color-ink-faint);
+  --rule: var(--color-pencil);
+  --grid: var(--color-grid);
+  --accent: var(--color-accent);
+  --success: var(--color-success);
+  --btn-fill: var(--color-ink);
+  --btn-text: var(--color-ink-on-dark);
+  --sunk: var(--color-paper-sunk);
+  --shadow: rgba(23, 19, 14, 0.12);
+  --shadow-btn: rgba(23, 19, 14, 0.3);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: var(--color-night-card);
+    --board: var(--color-night-board);
+    --ink: var(--color-cream);
+    --ink-muted: var(--color-cream-muted);
+    --ink-faint: var(--color-cream-muted);
+    --rule: #6b5c48;
+    --grid: #6b5c48;
+    --accent: #e8674b;
+    --success: #8fbf7a;
+    --btn-fill: var(--color-cream);
+    --btn-text: var(--color-night-board);
+    --sunk: #3a3128;
+    --shadow: rgba(0, 0, 0, 0.45);
+    --shadow-btn: rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
 }
 
 html {
-  background: var(--color-paper);
-  color: var(--color-ink);
+  background: var(--board);
+  color: var(--ink);
   -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
+  font-weight: 400;
   /* Standalone PWA on iPhone: don't let the page rubber-band. */
   overscroll-behavior-y: none;
 }
 
 /*
- * Every numeral in the app. Tabular figures so 09:30 and 11:00 occupy the
- * same width and a column of times lines up on the colon.
+ * Every numeral in the app. Fixed advance width so columns and counters
+ * never jitter.
  */
 .tnum {
   font-variant-numeric: tabular-nums lining-nums;
   font-feature-settings: 'tnum' 1, 'lnum' 1;
-  letter-spacing: -0.01em;
 }
 
-/* Small letterspaced label — the sketchbook's margin annotations. */
-.annot {
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.6875rem;
+/* Metric · 56 · 600 · tnum — the one big number on a screen. */
+.metric {
+  font-size: 56px;
   font-weight: 600;
-  color: var(--color-ink-soft);
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+/* Metric's smaller sibling, for the stat row. */
+.metric-sm {
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+/* Display — Caveat 700. Never below 20px, never numerals, never >1 line. */
+.hand {
+  font-family: var(--font-hand);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Caption · 12.5 · 500. */
+.caption {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+/* The uppercase margin annotation that labels each block. */
+.annot {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* Hard offset shadow — paper lifted off the desk, no blur. */
+.lift {
+  box-shadow: 3px 4px 0 var(--shadow);
+}
+
+.lift-btn {
+  box-shadow: 3px 4px 0 var(--shadow-btn);
+}
+
+/* Pressed: the card travels into its own shadow. */
+.press:active {
+  transform: translate(3px, 4px);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
 }
 
 /*
@@ -71,7 +215,6 @@ input[type='date'] {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
-/* Safe-area padding for the home indicator when installed. */
 .pb-safe {
   padding-bottom: max(1rem, env(safe-area-inset-bottom));
 }

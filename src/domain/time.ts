@@ -55,10 +55,14 @@ export function nowClock(): ClockTime {
   return toClock(d.getHours() * 60 + d.getMinutes());
 }
 
-/** 'Sun 26 Jul' — for headers, never for digits that need to line up. */
+/** 'Sunday' — safe to set in Caveat, because it holds no digits. */
+export function formatWeekday(iso: ISODate): string {
+  return fromISODate(iso).toLocaleDateString(undefined, { weekday: 'long' });
+}
+
+/** '26 Jul' — contains a numeral, so it must be set in Outfit. */
 export function formatDayLabel(iso: ISODate): string {
   return fromISODate(iso).toLocaleDateString(undefined, {
-    weekday: 'short',
     day: 'numeric',
     month: 'short',
   });

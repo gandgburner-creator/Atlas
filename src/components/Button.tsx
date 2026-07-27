@@ -1,74 +1,53 @@
-import { useEffect, useRef, type ButtonHTMLAttributes } from 'react';
-import rough from 'roughjs';
-import { actual, ink, paper, roughDefaults } from '../design/tokens';
+import type { ButtonHTMLAttributes } from 'react';
+import { SketchBorder } from './Sketch';
 
-type Variant = 'primary' | 'quiet';
+type Variant = 'primary' | 'secondary';
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
-  seed?: number;
+  /** Fills with the success colour and reads as done rather than actionable. */
+  done?: boolean;
 }
 
 /**
- * Hand-drawn button. 48px minimum height — this gets tapped half-awake, in
- * the dark, one-handed.
+ * Buttons, per the sheet: 52px tall, radius 5, hard offset shadow, and a
+ * press that travels into its own shadow.
+ *
+ * Primary is a solid ink fill. Secondary is paper with a filtered ink border
+ * and sinks to `paper sunk` when held.
  */
 export function Button({
   variant = 'primary',
-  seed = 12,
+  done = false,
   className = '',
   children,
   ...rest
 }: Props) {
-  const hostRef = useRef<HTMLButtonElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
+  const base =
+    'press relative flex min-h-[52px] items-center justify-center gap-2 px-6 text-base font-semibold transition-[transform,box-shadow,background] duration-75 disabled:pointer-events-none disabled:opacity-40';
 
-  useEffect(() => {
-    const host = hostRef.current;
-    const svg = svgRef.current;
-    if (!host || !svg) return;
-
-    const draw = () => {
-      const { width: w, height: h } = host.getBoundingClientRect();
-      if (w < 4 || h < 4) return;
-      svg.setAttribute('width', String(w));
-      svg.setAttribute('height', String(h));
-      svg.replaceChildren();
-      const rc = rough.svg(svg);
-      svg.appendChild(
-        rc.rectangle(2, 2, w - 4, h - 4, {
-          ...roughDefaults,
-          seed,
-          // Enough wobble to read as drawn, not so much that a small button
-          // looks knocked askew.
-          roughness: 0.9,
-          bowing: 0.7,
-          stroke: variant === 'primary' ? actual : ink,
-          strokeWidth: variant === 'primary' ? 2 : 1.3,
-          fill: variant === 'primary' ? actual : undefined,
-          fillStyle: 'solid',
-        }),
-      );
-    };
-
-    draw();
-    const ro = new ResizeObserver(draw);
-    ro.observe(host);
-    return () => ro.disconnect();
-  }, [variant, seed]);
+  if (variant === 'primary') {
+    return (
+      <button
+        className={`lift-btn rounded-[5px] ${base} ${className}`}
+        style={{
+          background: done ? 'var(--success)' : 'var(--btn-fill)',
+          color: done ? 'var(--color-ink-on-dark)' : 'var(--btn-text)',
+        }}
+        {...rest}
+      >
+        {children}
+      </button>
+    );
+  }
 
   return (
     <button
-      ref={hostRef}
-      className={`relative min-h-12 px-5 py-3 font-medium transition-opacity active:opacity-60 disabled:opacity-35 ${className}`}
-      style={{ color: variant === 'primary' ? paper : ink }}
+      className={`${base} bg-[var(--paper)] active:bg-[var(--sunk)] ${className}`}
+      style={{ borderRadius: 5, color: 'var(--ink)' }}
       {...rest}
     >
-      <svg
-        ref={svgRef}
-        className="pointer-events-none absolute inset-0"
-        aria-hidden="true"
-      />
+      <SketchBorder radius={5} strokeWidth={2.4} />
       <span className="relative">{children}</span>
     </button>
   );

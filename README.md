@@ -69,15 +69,30 @@ is a feature, not a migration.
 a timezone change. `focusSessions` is the exception — a session is a real
 interval, so it stores epoch millis.
 
-## Type
+## Design
 
-Numerals are a clean system sans with tabular figures throughout (`.tnum` in
-`src/index.css`), so a column of times lines up on the colon. The hand-drawn
-quality comes from Rough.js geometry — boxes, rules, the chart — never from
-the letterforms.
+Everything visual comes from the **Atlas Sketchbook Atoms v1** sheet. Tokens
+live in `src/design/tokens.ts`, mirrored by the `@theme` block in
+`src/index.css`; those two files are the only place a colour or stroke weight
+is written down.
 
-> **Design tokens:** the Claude Design project *Atlas Sketchbook Atoms* could
-> not be reached from the environment this was built in, so the palette and
-> stroke values in `src/design/tokens.ts` are a stand-in. Everything visual
-> routes through that file and the `@theme` block in `src/index.css` —
-> swapping in the real tokens is an edit to those two places.
+**Type is a pairing.** Caveat 700 carries headings and labels — never below
+20px, never longer than one line, and **never a numeral**. Outfit carries body
+text and every single digit, always with tabular figures, so a column of times
+lines up on the colon and a counter never jitters as it ticks. Both fonts are
+self-hosted in `public/fonts` and precached: a webfont fetched over the
+network is a webfont that doesn't arrive at 07:00 in airplane mode.
+
+**The wobble is a filter, not a library.** Cards, buttons and inputs are
+ordinary rounded rects displaced by the sheet's own `feTurbulence` filters
+(`src/components/Sketch.tsx`) at the sheet's own frequencies — 0.028 for
+cards, 0.041 for chart work and inputs, 0.05 for small marks. Rough.js draws
+the chart, where the line is generated rather than filtered.
+
+**Night paper** follows `prefers-color-scheme`: cream ink on a toned board,
+not white on black. The palette swaps; the ink weights don't.
+
+One deliberate reading of the brief: the sheet assigns the accent red
+`#C4452E` to target lines, and the chart uses it there. Red never marks a
+missed day, a late wake time, or anything else you did — the "no red, no
+guilt" rule is about judgement, and nothing in Atlas judges.

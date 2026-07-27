@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { SketchDefs } from './components/Sketch';
 import { getRamp } from './db/config';
 import type { RampConfig } from './domain/ramp';
 import { todayISO } from './domain/time';
@@ -45,6 +46,8 @@ export default function App() {
 
   return (
     <div className="mx-auto flex min-h-dvh max-w-[390px] flex-col px-5">
+      <SketchDefs />
+
       <main className="pt-safe flex-1 pb-8">
         {!ramp ? (
           <Onboarding onReady={setRamp} />
@@ -60,19 +63,36 @@ export default function App() {
         when there are more sections this gets rethought, not extended.
       */}
       {ramp && (
-        <nav className="pb-safe sticky bottom-0 flex gap-2 bg-paper pt-2">
+        <nav className="pb-safe sticky bottom-0 flex gap-6 bg-[var(--board)] pt-3">
           {(['today', 'progress'] as const).map((s) => (
             <button
               key={s}
               onClick={() => setScreen(s)}
               aria-current={screen === s ? 'page' : undefined}
-              className={`flex-1 py-3 text-sm capitalize transition-opacity ${
-                screen === s
-                  ? 'font-semibold text-ink'
-                  : 'text-ink-faint active:opacity-60'
-              }`}
+              className="hand relative flex-1 py-2 text-[24px]"
+              style={{
+                color: screen === s ? 'var(--ink)' : 'var(--ink-faint)',
+              }}
             >
               {s}
+              {/* The current tab is underscored by hand, not boxed. */}
+              {screen === s && (
+                <svg
+                  className="absolute inset-x-4 -bottom-0.5 h-2"
+                  viewBox="0 0 120 8"
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M2 5 Q30 1 60 4 T118 3"
+                    stroke="var(--accent)"
+                    strokeWidth="2.6"
+                    fill="none"
+                    strokeLinecap="round"
+                    filter="url(#roughSoft)"
+                  />
+                </svg>
+              )}
             </button>
           ))}
         </nav>

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button } from '../components/Button';
-import { RoughUnderline } from '../components/Rough';
+import { DashedRule, SketchCard } from '../components/Sketch';
+import { TimeField } from '../components/TimeField';
 import { initRamp } from '../db/config';
 import { DEFAULT_RAMP, type RampConfig } from '../domain/ramp';
 import { formatDayLabel, todayISO } from '../domain/time';
@@ -28,47 +29,41 @@ export function Onboarding({ onReady }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <header>
-        <h1 className="text-3xl font-semibold">Atlas</h1>
-        <p className="mt-2 text-base text-ink-soft">
-          Shifting your wake time 30 minutes earlier each week. Wake time is
-          the anchor; bedtime follows it.
+    <div className="flex flex-col gap-7">
+      <header className="flex flex-col gap-2">
+        <span className="annot">personal tracking</span>
+        <h1 className="hand text-[64px] leading-[0.9]">Atlas</h1>
+        <p className="text-base leading-[1.55]">
+          Shifting your wake time 30 minutes earlier each week. Wake is the
+          anchor; bedtime follows it.
         </p>
-        <RoughUnderline className="mt-4" seed={2} />
       </header>
 
-      <section>
-        <label htmlFor="start" className="annot block">
-          Week 1 begins
-        </label>
-        <input
-          id="start"
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="tnum mt-1 w-full bg-transparent py-2 text-2xl outline-none"
-        />
-        <RoughUnderline seed={6} />
-        {date && (
-          <p className="mt-2 text-sm text-ink-soft">{formatDayLabel(date)}</p>
-        )}
-      </section>
+      <DashedRule />
 
-      <section>
-        <p className="annot">The ramp</p>
-        <ul className="mt-3 flex flex-col gap-1">
+      <TimeField
+        type="date"
+        label="week 1 begins"
+        value={date}
+        onChange={setDate}
+        hint={date ? formatDayLabel(date) : undefined}
+      />
+
+      <SketchCard filter="rough2" className="px-5 pt-4 pb-5">
+        <span className="hand text-[26px]">the ramp</span>
+        <ul className="mt-3 flex flex-col gap-2">
           {DEFAULT_RAMP.steps.map((step, i) => (
             <li key={step} className="flex items-baseline justify-between">
-              <span className="text-sm text-ink-soft">Week {i + 1}</span>
-              <span className="tnum text-lg">{step}</span>
+              <span className="caption">Week {i + 1}</span>
+              <span className="tnum text-xl font-semibold">{step}</span>
             </li>
           ))}
         </ul>
-        <p className="mt-3 text-xs text-ink-soft">
+        <DashedRule className="mt-4 pt-3" />
+        <p className="caption pt-1">
           You can hold any week for longer without losing your place.
         </p>
-      </section>
+      </SketchCard>
 
       <Button onClick={start} disabled={!date || busy}>
         {busy ? 'Starting…' : 'Start'}

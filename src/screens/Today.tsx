@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
-import { RoughBox, RoughUnderline } from '../components/Rough';
+import { DashedRule, SketchBorder, SketchCard } from '../components/Sketch';
 import { TimeField } from '../components/TimeField';
 import { saveRamp } from '../db/config';
 import { getSleepLog, saveSleepLog } from '../db/sleep';
@@ -13,7 +13,12 @@ import {
   weekNumberFor,
   type RampConfig,
 } from '../domain/ramp';
-import { describeDelta, formatDayLabel, nowClock } from '../domain/time';
+import {
+  describeDelta,
+  formatDayLabel,
+  formatWeekday,
+  nowClock,
+} from '../domain/time';
 
 interface Props {
   ramp: RampConfig;
@@ -76,59 +81,79 @@ export function Today({ ramp, today, onRampChange }: Props) {
   const showForm = editing || (!loading && !log);
 
   return (
-    <div className="flex flex-col gap-7">
-      <header>
-        <p className="annot">{formatDayLabel(today)}</p>
-        <RoughUnderline className="mt-2" seed={4} />
+    <div className="flex flex-col gap-6">
+      {/*
+        The weekday is handwritten; the date is not. Caveat never sets a
+        numeral, so "Monday" and "27 Jul" are two different typefaces.
+      */}
+      <header className="flex items-baseline justify-between gap-3">
+        <div className="flex items-baseline gap-2.5">
+          <h1 className="hand text-[40px]">{formatWeekday(today)}</h1>
+          <span className="tnum caption">{formatDayLabel(today)}</span>
+        </div>
+        <span className="annot shrink-0">
+          {week === null
+            ? 'not started'
+            : complete
+              ? `holding · wk ${week}`
+              : `week ${week}/${ramp.steps.length}`}
+        </span>
       </header>
 
       {/* Target — the one number that matters this morning. */}
-      <section>
-        <p className="annot">
-          {week === null
-            ? 'ramp starts soon'
-            : complete
-              ? `holding · week ${week}`
-              : `week ${week} of ${ramp.steps.length}`}
-          {repeated && ' · repeating'}
-        </p>
-        <p className="tnum mt-1 text-7xl leading-none font-semibold">
-          {target}
-        </p>
-        <p className="mt-2 text-sm text-ink-soft">
-          Target wake time. Bedtime follows it.
-        </p>
-      </section>
+      <SketchCard className="px-5 pt-4 pb-5">
+        <div className="flex items-center justify-between">
+          <span className="hand text-2xl">wake target</span>
+          {repeated && (
+            <span
+              className="caption font-semibold"
+              style={{ color: 'var(--accent)' }}
+            >
+              repeating
+            </span>
+          )}
+        </div>
+        <p className="tnum metric mt-1">{target}</p>
+        <p className="caption mt-2">Wake is the anchor. Bedtime follows it.</p>
+      </SketchCard>
 
       {loading ? null : showForm ? (
-        <section className="flex flex-col gap-6">
+        <section className="flex flex-col gap-5">
           <TimeField
-            label="Woke at"
+            label="woke at"
             value={wake}
             onChange={setWake}
             hint={wake ? (describeDelta(wake, target) ?? undefined) : undefined}
           />
           <TimeField
-            label="Fell asleep"
+            label="fell asleep"
             value={onset}
             onChange={setOnset}
             optional
-            hint="Rough estimate is fine."
+            hint="A rough estimate is fine."
           />
-          <div>
-            <label htmlFor="note" className="annot block">
-              What happened today
+
+          <div className="flex flex-col gap-2">
+            <label htmlFor="note" className="hand text-[22px]">
+              what happened today
             </label>
-            <input
-              id="note"
-              type="text"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="One line, or nothing at all"
-              enterKeyHint="done"
-              className="mt-1 w-full bg-transparent py-2 text-base outline-none placeholder:text-ink-faint"
-            />
-            <RoughUnderline seed={11} />
+            <div className="relative flex h-[56px] items-center bg-[var(--paper)] px-4 [--field-stroke:var(--ink)] focus-within:[--field-stroke:var(--accent)]">
+              <SketchBorder
+                filter="rough2"
+                radius={4}
+                strokeWidth={2.2}
+                stroke="var(--field-stroke)"
+              />
+              <input
+                id="note"
+                type="text"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="One line, or nothing at all"
+                enterKeyHint="done"
+                className="relative w-full bg-transparent text-base outline-none placeholder:text-[var(--ink-faint)]"
+              />
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -136,16 +161,12 @@ export function Today({ ramp, today, onRampChange }: Props) {
               {saving ? 'Saving…' : 'Save'}
             </Button>
             {log && (
-              <Button
-                variant="quiet"
-                seed={19}
-                onClick={() => {
-                  setWake(log.actualWake);
-                  setOnset(log.sleepOnset ?? '');
-                  setNote(log.note ?? '');
-                  setEditing(false);
-                }}
-              >
+              <Button variant="secondary" onClick={() => {
+                setWake(log.actualWake);
+                setOnset(log.sleepOnset ?? '');
+                setNote(log.note ?? '');
+                setEditing(false);
+              }}>
                 Cancel
               </Button>
             )}
@@ -153,31 +174,48 @@ export function Today({ ramp, today, onRampChange }: Props) {
         </section>
       ) : (
         log && (
-          <RoughBox seed={5} className="p-5">
-            <p className="annot">Logged</p>
-            <p className="tnum mt-1 text-4xl font-semibold">
-              {log.actualWake}
-            </p>
-            {describeDelta(log.actualWake, log.targetWake) && (
-              <p className="mt-1 text-sm text-ink-soft">
-                {describeDelta(log.actualWake, log.targetWake)}
-              </p>
-            )}
+          <SketchCard filter="rough2" className="px-5 pt-4 pb-5">
+            <div className="flex items-center justify-between">
+              <span className="hand text-2xl">woke at</span>
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--success)"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                filter="url(#roughSoft)"
+                aria-hidden="true"
+              >
+                <path d="M4.5 12.8 9.6 18 20 6.4" />
+              </svg>
+            </div>
+            <div className="mt-1 flex items-baseline gap-3">
+              <span className="tnum metric-sm">{log.actualWake}</span>
+              {describeDelta(log.actualWake, log.targetWake) && (
+                <span className="caption">
+                  {describeDelta(log.actualWake, log.targetWake)}
+                </span>
+              )}
+            </div>
             {log.sleepOnset && (
-              <p className="tnum mt-3 text-sm text-ink-soft">
+              <p className="tnum caption mt-3">
                 Asleep around {log.sleepOnset}
               </p>
             )}
-            {log.note && <p className="mt-3 text-base">{log.note}</p>}
+            {log.note && (
+              <p className="mt-3 text-base leading-[1.55]">{log.note}</p>
+            )}
             <Button
-              variant="quiet"
-              seed={23}
-              className="mt-4"
+              variant="secondary"
+              className="mt-4 w-full"
               onClick={() => setEditing(true)}
             >
               Edit
             </Button>
-          </RoughBox>
+          </SketchCard>
         )
       )}
 
@@ -187,23 +225,16 @@ export function Today({ ramp, today, onRampChange }: Props) {
         back off just as easily.
       */}
       {week !== null && (
-        <section>
-          <RoughUnderline seed={31} />
-          <div className="mt-4 flex items-start justify-between gap-4">
-            <p className="text-sm text-ink-soft">
-              {repeated
-                ? `Holding ${target} for another week. The ramp picks up after that.`
-                : 'Need more time at this wake time? Hold it.'}
-            </p>
-            <Button
-              variant="quiet"
-              seed={27}
-              onClick={onToggleRepeat}
-              className="shrink-0 text-sm"
-            >
-              {repeated ? 'Advance instead' : 'Repeat this week'}
-            </Button>
-          </div>
+        <section className="flex flex-col gap-3">
+          <DashedRule className="mt-1" />
+          <p className="caption">
+            {repeated
+              ? `Holding ${target} for another week. The ramp picks up after that.`
+              : 'Need more time at this wake time? Hold it — the ramp waits.'}
+          </p>
+          <Button variant="secondary" onClick={onToggleRepeat}>
+            {repeated ? 'Advance instead' : 'Repeat this week'}
+          </Button>
         </section>
       )}
     </div>
