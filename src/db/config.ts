@@ -41,6 +41,22 @@ export async function initRamp(startDate: string): Promise<RampConfig> {
   return ramp;
 }
 
+// ── First run ─────────────────────────────────────────────────────────────
+
+/**
+ * Whether the intro has been shown. Anyone who already has a ramp is treated
+ * as having seen it — an existing user must never be handed a tutorial for an
+ * app they've been using for weeks.
+ */
+export async function getTutorialSeen(): Promise<boolean> {
+  if (await get<boolean>('tutorialSeen')) return true;
+  return Boolean(await get<unknown>('ramp'));
+}
+
+export function setTutorialSeen(seen: boolean): Promise<void> {
+  return set('tutorialSeen', seen);
+}
+
 // ── Commitments ───────────────────────────────────────────────────────────
 
 export function getCommitmentOverrides(): Promise<CommitmentOverrides | undefined> {
