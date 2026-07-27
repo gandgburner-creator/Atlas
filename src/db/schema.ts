@@ -91,6 +91,8 @@ export interface FocusSession {
   /** 1–5. */
   satisfaction: number;
   completed: boolean;
+  /** Which section the hours count toward. Absent on old rows = 'work'. */
+  area?: 'work' | 'craft';
 }
 
 export interface LifeLog {
@@ -103,9 +105,66 @@ export interface LifeLog {
 export interface Photo {
   id?: number;
   date: ISODate;
-  /** e.g. 'progress' | 'meal'. */
+  /** e.g. 'progress' | 'inbody' | 'meal'. */
   type: string;
   blob: Blob;
+}
+
+/**
+ * An InBody scan. Core six fields are required to save; everything else is
+ * optional and hidden behind "more measurements" in the form. `photoId`
+ * points at the printout photo in the photos table.
+ */
+export interface InBodyReading {
+  id?: number;
+  date: ISODate;
+  weightKg: number;
+  skeletalMuscleMassKg: number;
+  bodyFatMassKg: number;
+  bodyFatPercent: number;
+  fatFreeMassKg: number;
+  // Segmental lean mass, kg
+  leanRightArm?: number;
+  leanLeftArm?: number;
+  leanTrunk?: number;
+  leanRightLeg?: number;
+  leanLeftLeg?: number;
+  // Segmental fat mass, kg
+  fatRightArm?: number;
+  fatLeftArm?: number;
+  fatTrunk?: number;
+  fatRightLeg?: number;
+  fatLeftLeg?: number;
+  // Metabolic & health
+  visceralFatLevel?: number;
+  basalMetabolicRate?: number;
+  totalBodyWaterL?: number;
+  ecwTbwRatio?: number;
+  proteinMassKg?: number;
+  mineralMassKg?: number;
+  bmi?: number;
+  inbodyScore?: number;
+  waistHipRatio?: number;
+  photoId?: number;
+}
+
+/** The weekly letter: a few lines written once a week, never graded. */
+export interface Letter {
+  /** Monday of the week it covers. Primary key. */
+  weekStart: ISODate;
+  title: string;
+  body: string;
+  writtenAt: number;
+}
+
+/** A craft pipeline item: Idea > Scripted > Filmed > Edited > Published. */
+export interface CraftItem {
+  id?: number;
+  title: string;
+  status: 'idea' | 'scripted' | 'filmed' | 'edited' | 'published';
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 // ── Config ────────────────────────────────────────────────────────────────
@@ -129,6 +188,9 @@ export class AtlasDB extends Dexie {
   focusSessions!: EntityTable<FocusSession, 'id'>;
   lifeLogs!: EntityTable<LifeLog, 'date'>;
   photos!: EntityTable<Photo, 'id'>;
+  inbody!: EntityTable<InBodyReading, 'id'>;
+  craftItems!: EntityTable<CraftItem, 'id'>;
+  letters!: EntityTable<Letter, 'weekStart'>;
   config!: EntityTable<ConfigEntry, 'key'>;
 
   constructor() {
@@ -143,6 +205,16 @@ export class AtlasDB extends Dexie {
       lifeLogs: 'date',
       photos: '++id, date, type',
       config: 'key',
+    });
+    // v2: the full app. Existing tables untouched — sleep data carries over
+    // byte for byte. focusSessions rows gain an un-indexed `area` property
+    // ('work' | 'craft') which needs no schema change.
+    this.version(2).stores({
+      inbody: '++id, date',
+      craftItems: '++id, status',
+    });
+    this.version(3).stores({
+      letters: 'weekStart',
     });
   }
 }
