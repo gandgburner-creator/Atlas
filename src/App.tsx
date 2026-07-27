@@ -4,7 +4,9 @@ import { SketchDefs } from './components/Sketch';
 import {
   getRamp,
   getTrainingState,
+  getTutorialSeen,
   saveTrainingState,
+  setTutorialSeen,
 } from './db/config';
 import type { RampConfig } from './domain/ramp';
 import { todayISO } from './domain/time';
@@ -20,6 +22,7 @@ import { Progress } from './screens/Progress';
 import { Projection } from './screens/Projection';
 import { Settings } from './screens/Settings';
 import { Today as SleepToday } from './screens/Today';
+import { Tutorial } from './screens/Tutorial';
 import { TrainingLog } from './screens/TrainingLog';
 import { WorkScreen } from './screens/Work';
 import { PushHeader } from './components/Chrome';
@@ -58,10 +61,12 @@ function Shell({
   ramp,
   today,
   onRampChange,
+  onReplayTutorial,
 }: {
   ramp: RampConfig;
   today: string;
   onRampChange: (r: RampConfig) => void;
+  onReplayTutorial: () => void;
 }) {
   const nav = useNav();
 
@@ -98,7 +103,12 @@ function Shell({
           ) : pushed.name === 'projection' ? (
             <Projection today={today} />
           ) : (
-            <Settings ramp={ramp} today={today} onRampChange={onRampChange} />
+            <Settings
+              ramp={ramp}
+              today={today}
+              onRampChange={onRampChange}
+              onReplayTutorial={onReplayTutorial}
+            />
           )
         ) : nav.tab === 'today' ? (
           <Home ramp={ramp} today={today} />
@@ -153,28 +163,48 @@ function Shell({
 
 export default function App() {
   const [ramp, setRamp] = useState<RampConfig | null>(null);
+  const [tutorialDone, setTutorialDone] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const today = useToday();
 
   useEffect(() => {
-    getRamp()
-      .then((r) => setRamp(r ?? null))
+    Promise.all([getRamp(), getTutorialSeen()])
+      .then(([r, seen]) => {
+        setRamp(r ?? null);
+        setTutorialDone(seen);
+      })
       .finally(() => setLoaded(true));
   }, []);
 
   if (!loaded) return null;
 
+  async function finishTutorial() {
+    await setTutorialSeen(true);
+    setTutorialDone(true);
+  }
+
+  // First run reads: intro → set the ramp → the app. Replaying the intro from
+  // Settings drops back in here and lands on the app, since the ramp exists.
+  const screen = !tutorialDone ? (
+    <Tutorial onDone={finishTutorial} />
+  ) : !ramp ? (
+    <Onboarding onReady={setRamp} />
+  ) : null;
+
   return (
     <NavProvider>
       <SketchDefs />
-      {!ramp ? (
+      {screen ? (
         <div className="mx-auto flex min-h-dvh max-w-[390px] flex-col px-5">
-          <main className="pt-safe flex-1 pb-8">
-            <Onboarding onReady={setRamp} />
-          </main>
+          <main className="pt-safe flex-1 pb-8">{screen}</main>
         </div>
       ) : (
-        <Shell ramp={ramp} today={today} onRampChange={setRamp} />
+        <Shell
+          ramp={ramp as RampConfig}
+          today={today}
+          onRampChange={setRamp}
+          onReplayTutorial={() => setTutorialDone(false)}
+        />
       )}
     </NavProvider>
   );

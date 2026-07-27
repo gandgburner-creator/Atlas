@@ -31,6 +31,7 @@ interface Props {
   ramp: RampConfig;
   today: string;
   onRampChange: (r: RampConfig) => void;
+  onReplayTutorial: () => void;
 }
 
 /**
@@ -38,7 +39,7 @@ interface Props {
  * it, reorder the split — all without touching code. That is the contract:
  * the app never needs editing to change the plan.
  */
-export function Settings({ ramp, today, onRampChange }: Props) {
+export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props) {
   const data = useLiveQuery(async () => {
     const [overrides, training, kcal, focusMin, craftMin, plan, lean] =
       await Promise.all([
@@ -73,6 +74,17 @@ export function Settings({ ramp, today, onRampChange }: Props) {
         lean={data.lean}
       />
       <RampEditor ramp={ramp} onRampChange={onRampChange} />
+
+      <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
+        <span className="hand text-[26px]">the intro</span>
+        <p className="caption mt-0.5">
+          The four cards shown on first open. Nothing is changed by watching
+          it again.
+        </p>
+        <Button variant="secondary" className="mt-3 w-full" onClick={onReplayTutorial}>
+          Show me the intro again
+        </Button>
+      </SketchCard>
     </div>
   );
 }
