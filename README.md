@@ -17,15 +17,39 @@ npm test         # ramp and stats derivation
 npm run build    # production build into dist/
 ```
 
+## Deploying
+
+`.github/workflows/deploy.yml` builds and publishes to GitHub Pages on every
+push to `main`, and can also be run by hand from the Actions tab to deploy a
+branch before merging. The live app is:
+
+    https://gandgburner-creator.github.io/Atlas/
+
+One-time setup, both in the repo's **Settings**: the repo must be **public**
+(Pages is only free for public repos), and **Pages → Source** must be set to
+**GitHub Actions**.
+
+**The sub-path matters.** Pages serves a project site from `/<repo>/`, not the
+domain root, so the workflow builds with `BASE_PATH=/Atlas/`. That flows into
+Vite's `base`, the manifest's `start_url` and `scope`, and the service
+worker's `navigateFallback` — if any of them disagreed, iOS would open the
+installed app in a browser tab instead of standalone, and the fonts would
+404. It's also why the fonts live in `src/fonts` rather than `public/`: Vite
+rewrites `url()` in CSS against the base, and a bare `/fonts/…` would resolve
+to the domain root.
+
+Any host that serves the app from the **domain root** needs no `BASE_PATH` at
+all — the default is `/`.
+
 ## Installing it on an iPhone
 
-The service worker needs HTTPS (or `localhost`), so serve `dist/` from
-anywhere with a certificate — a tunnel to your laptop, a static host, a Pi on
-your LAN with TLS. Then in **Safari** (not Chrome — only Safari can install a
-PWA on iOS): **Share → Add to Home Screen**.
+Open the URL in **Safari** — only Safari can install a PWA on iOS, Chrome
+can't — then **Share → Add to Home Screen**.
 
-It launches standalone, with no browser chrome, and works with the phone in
-airplane mode. Everything is precached; there is nothing to reach for.
+It launches standalone, with no browser chrome, and works in airplane mode.
+Everything is precached; there is nothing to reach for. Your logs live in
+IndexedDB on the phone and are never uploaded, which also means **deleting
+the app deletes the data** — there's no backup yet.
 
 ## The two screens
 
