@@ -10,6 +10,14 @@ import { addDays, daysBetween, fromISODate } from './time';
  * session is simply next tomorrow. There is no makeup logic, no debt, and no
  * missed-day state anywhere in this file, because nothing is ever missed,
  * only delayed. That is the module's most important behaviour; guard it.
+ *
+ * Every mutation here is a pure function over a TrainingState value — it does
+ * not read or write storage. src/db/config.ts is the only place a
+ * TrainingState is persisted, and it serializes every write through one
+ * queue so two of these functions can never be applied to the same stale
+ * snapshot and compound into more than one step. If the pointer ever jumps
+ * by more than one position for a single completed session, that is a
+ * storage-layer race, not a bug in this arithmetic — look there first.
  */
 
 export function currentSlot(state: TrainingState): string {
@@ -17,10 +25,12 @@ export function currentSlot(state: TrainingState): string {
 }
 
 /**
- * Let elapsed rest days pass. Called on load with today's date: while the
- * current slot is 'rest' and at least one calendar day has gone by since the
- * last pass (or session), the pointer moves on — one day per rest slot.
- * Paused state freezes everything; those days are excluded, not missed.
+ * Let elapsed rest days pass. Called with today's date: while the current
+ * slot is 'rest' and at least one calendar day has gone by since the last
+ * pass (or session), the pointer moves on — one day per rest slot, and it
+ * stops the instant it reaches a non-rest slot, so at most one slot advances
+ * per real calendar day. Paused state freezes everything; those days are
+ * excluded, not missed.
  */
 export function passRestDays(state: TrainingState, today: ISODate): TrainingState {
   if (state.pause) return state;
@@ -44,9 +54,10 @@ export function passRestDays(state: TrainingState, today: ISODate): TrainingStat
 }
 
 /**
- * A completed session advances the pointer. Partial sessions are normal —
- * two of four exercises IS a completed session. The caller decides nothing;
- * saving a session with any logged set is completion.
+ * A completed session advances the pointer by EXACTLY one position in the
+ * split, wrapping at the end. Partial sessions are normal — two of four
+ * exercises, or even zero, IS a completed session. The caller decides
+ * nothing; finishing is completion regardless of what was logged.
  */
 export function advanceAfterSession(
   state: TrainingState,
@@ -67,6 +78,30 @@ export function sessionFor(state: TrainingState, date: ISODate): string {
   return currentSlot(state);
 }
 
+/**
+ * Manual override: jump the pointer to the NEAREST occurrence of
+ * `sessionType` in the split, searching forward from the current pointer
+ * (wrapping once) so picking "rest" from a split with two rest slots lands
+ * on whichever is closer, not always the first. Returns the state unchanged
+ * if the split doesn't contain that session type at all.
+ */
+export function overrideToSession(
+  state: TrainingState,
+  sessionType: string,
+  today: ISODate,
+): TrainingState {
+  const len = state.split.length;
+  for (let offset = 0; offset < len; offset++) {
+    const idx = (state.pointer + offset) % len;
+    if (state.split[idx] === sessionType) {
+      // Only the modulo of pointer is ever read elsewhere, so the absolute
+      // value can just become the target index itself.
+      return { ...state, pointer: idx, lastRestPass: today };
+    }
+  }
+  return state;
+}
+
 // ── Last time ─────────────────────────────────────────────────────────────
 
 export interface LastExercise {
@@ -78,14 +113,17 @@ export interface LastExercise {
 /**
  * The previous session of a given type, unpacked per exercise. At the rack
  * this is the only thing that matters, so it renders first and largest.
+ * `excludeDate` skips the session currently being edited, so re-opening
+ * today's own (already-saved) session doesn't show itself as "last time".
  */
 export function lastTimeFor(
   workouts: Workout[],
   sessionType: string,
+  excludeDate?: ISODate,
 ): Map<string, LastExercise> {
   const map = new Map<string, LastExercise>();
   const sorted = [...workouts]
-    .filter((w) => w.sessionType === sessionType)
+    .filter((w) => w.sessionType === sessionType && w.date !== excludeDate)
     .sort((a, b) => b.date.localeCompare(a.date));
   for (const w of sorted) {
     for (const ex of w.exercises) {
@@ -104,15 +142,25 @@ const DUMBBELL_LADDER = [
   4, 6, 8, 10, 12.5, 15, 17.5, 20, 22.5, 25, 27.5, 30, 32.5, 35, 37.5, 40,
 ];
 
+export interface OverloadHint {
+  /** Suggested next weight, or null when there's no honest number to give
+   * (cable/machine pin spacing varies too much by gym to invent a figure). */
+  weight: number | null;
+  text: string;
+}
+
 /**
  * If every set of the previous session hit the top of the rep range, quietly
  * suggest the next increment. Returns null otherwise — no hint is the
- * default, and the hint is a suggestion, never a demand.
+ * default, and the hint is a suggestion, never a demand. A stalled, dropped,
+ * or reduced number from last time is never flagged here or anywhere else —
+ * a deficit makes that normal, and this function only ever has something to
+ * say when things went UP.
  */
 export function overloadHint(
   last: LastExercise | undefined,
   def: ExerciseDef,
-): { weight: number; text: string } | null {
+): OverloadHint | null {
   if (!last || last.sets.length === 0) return null;
   const allTop = last.sets.every((s) => s.reps >= def.repRangeTop);
   if (!allTop) return null;
@@ -127,7 +175,20 @@ export function overloadHint(
     if (!next) return null;
     return { weight: next, text: `all sets hit ${def.repRangeTop} — try ${next} kg` };
   }
-  // Bodyweight: more reps, not more load.
+  if (def.equipment === 'machine') {
+    // Pin spacing varies by machine and gym — a specific kg figure would
+    // often just be wrong, so the suggestion names the pin, not a number.
+    return { weight: null, text: `all sets hit ${def.repRangeTop} — try the next pin up` };
+  }
+  // Bodyweight. Pull-ups (and anything else marked progressToWeighted) are
+  // "max reps" work: once the rep ceiling is cleared on every set, the next
+  // step is load, not more reps.
+  if (def.progressToWeighted) {
+    return {
+      weight: null,
+      text: `all sets cleared ${def.repRangeTop} — try adding weight`,
+    };
+  }
   return {
     weight: w,
     text: `all sets hit ${def.repRangeTop} — try ${def.repRangeTop + 1} reps`,

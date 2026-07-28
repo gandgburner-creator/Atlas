@@ -1,8 +1,9 @@
 import { useLiveQuery } from 'dexie-react-hooks';
+import { Button } from '../components/Button';
 import { Icon, type IconName } from '../components/Icon';
 import { Ring } from '../components/Ring';
 import { SketchCard } from '../components/Sketch';
-import { getCommitmentOverrides } from '../db/config';
+import { getCommitmentOverrides, getLastFinish, undoLastFinish } from '../db/config';
 import {
   resolveCommitments,
   ringStates,
@@ -50,11 +51,18 @@ export function Home({ ramp, today }: Props) {
   const data = useLiveQuery(async () => {
     const overrides = (await getCommitmentOverrides()) ?? {};
     const summary = await summariseDay(today);
-    return { overrides, summary };
+    const lastFinish = await getLastFinish();
+    return { overrides, summary, lastFinish };
   }, [today]);
 
   if (!data) return null;
-  const { overrides, summary } = data;
+  const { overrides, summary, lastFinish } = data;
+  const canUndo = lastFinish?.date === today;
+
+  async function undo() {
+    await undoLastFinish();
+    nav.push({ name: 'training-log' });
+  }
 
   const rings = ringStates(ramp.startDate, today, overrides, summary.doneIds);
   const commitments = resolveCommitments(ramp.startDate, today, overrides);
@@ -128,6 +136,19 @@ export function Home({ ramp, today }: Props) {
           ))}
         </div>
       </SketchCard>
+
+      {/* Undo stays available for the rest of the day it was finished on. */}
+      {canUndo && (
+        <SketchCard filter="rough2" className="flex items-center gap-3 px-4 py-3">
+          <p className="flex-1 text-[14px] leading-snug">
+            <span className="hand text-[20px]">{lastFinish!.sessionType}</span> was
+            just finished.
+          </p>
+          <Button variant="secondary" onClick={undo} className="shrink-0 px-3 text-[14px]">
+            Undo
+          </Button>
+        </SketchCard>
+      )}
 
       {/* Today's checklist — every row is one tap from done. */}
       <section className="flex flex-col gap-2.5">

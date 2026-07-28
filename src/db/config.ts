@@ -1,6 +1,11 @@
-import { db } from './schema';
+import { db, type Workout, type WorkoutExercise } from './schema';
 import { DEFAULT_RAMP, type RampConfig } from '../domain/ramp';
 import type { CommitmentOverrides } from '../domain/commitments';
+import {
+  advanceAfterSession,
+  overrideToSession,
+  passRestDays,
+} from '../domain/training';
 
 /**
  * Typed doors onto the config KV table. Everything the user can change
@@ -129,43 +134,238 @@ export function saveTrainingState(s: TrainingState): Promise<void> {
 /** Exercise definitions per session type, set on first use of each. */
 export interface ExerciseDef {
   name: string;
-  /** Rep range top used for the overload hint. */
+  /** Rep range top used for the overload hint — and for "max reps" work
+   * (pull-ups), the clear-it-and-add-weight threshold. */
   repRangeTop: number;
-  /** 'barbell' | 'dumbbell' | 'bodyweight' — decides the increment hint. */
-  equipment: 'barbell' | 'dumbbell' | 'bodyweight';
+  /** Bottom of the target range, display only — e.g. "10-12 reps". */
+  repRangeBottom?: number;
+  /** Decides the increment hint: barbell +2.5kg, dumbbell next size up,
+   * machine "next pin" (no invented number — pin spacing varies by gym). */
+  equipment: 'barbell' | 'dumbbell' | 'bodyweight' | 'machine';
   /** First-ever tap pre-fills these, before any history exists. */
   seedWeight?: number;
   seedReps?: number;
+  /** Default rest after a set of THIS exercise, seconds. Auto-starts the
+   * timer — heavy compounds need 3+ minutes for phosphocreatine recovery,
+   * isolation work recovers in 60-90s and longer just wastes gym time. */
+  restSec: number;
+  /** Bodyweight exercises normally progress by adding a rep. A few (pull-ups)
+   * progress by adding load once the rep ceiling is cleared instead. */
+  progressToWeighted?: boolean;
 }
 
 export type ExercisePlans = Record<string, ExerciseDef[]>;
 
 /**
- * Seed plan. Legs is squats and RDL ONLY — knee injury history, squats stop
- * just below 90°. Never add leg exercises here.
+ * The full four-day program. Legs is squats and RDL ONLY — knee injury
+ * history, squats stop just below 90°. That list is locked: enforced again
+ * in saveExercisePlans below, not just in the UI, so no future screen can
+ * accidentally add a leg exercise.
  */
 export const DEFAULT_EXERCISE_PLANS: ExercisePlans = {
-  legs: [
-    { name: 'Squat', repRangeTop: 8, equipment: 'barbell' },
-    { name: 'Romanian deadlift', repRangeTop: 10, equipment: 'barbell' },
-  ],
-  chest: [
-    { name: 'Bench press', repRangeTop: 8, equipment: 'barbell', seedWeight: 80, seedReps: 8 },
+  back: [
+    { name: 'Pull-ups', repRangeTop: 8, equipment: 'bodyweight', seedReps: 8, restSec: 180, progressToWeighted: true },
+    { name: 'Barbell row', repRangeTop: 8, equipment: 'barbell', restSec: 180 },
+    { name: 'Lat pulldown', repRangeTop: 12, repRangeBottom: 10, equipment: 'machine', restSec: 120 },
+    { name: 'Chest-supported row', repRangeTop: 12, repRangeBottom: 10, equipment: 'machine', restSec: 120 },
+    { name: 'Barbell curl', repRangeTop: 10, equipment: 'barbell', restSec: 90 },
   ],
   shoulders: [
-    { name: 'DB shoulder press', repRangeTop: 8, equipment: 'dumbbell', seedWeight: 22.5, seedReps: 8 },
+    { name: 'DB shoulder press', repRangeTop: 8, equipment: 'dumbbell', seedWeight: 22.5, seedReps: 8, restSec: 150 },
+    { name: 'Lateral raise', repRangeTop: 15, repRangeBottom: 12, equipment: 'dumbbell', restSec: 75 },
+    { name: 'Face pull', repRangeTop: 15, equipment: 'machine', restSec: 75 },
+    { name: 'Cable lateral raise', repRangeTop: 15, repRangeBottom: 12, equipment: 'machine', restSec: 60 },
+    { name: 'Shrugs', repRangeTop: 12, equipment: 'barbell', restSec: 90 },
   ],
-  back: [
-    { name: 'Pull-ups', repRangeTop: 10, equipment: 'bodyweight', seedReps: 8 },
+  // Locked. Do not add leg exercises — see saveExercisePlans.
+  legs: [
+    { name: 'Back squat', repRangeTop: 8, repRangeBottom: 6, equipment: 'barbell', restSec: 210 },
+    { name: 'Romanian deadlift', repRangeTop: 10, repRangeBottom: 8, equipment: 'barbell', restSec: 180 },
+  ],
+  chest: [
+    { name: 'Barbell bench press', repRangeTop: 8, equipment: 'barbell', seedWeight: 80, seedReps: 8, restSec: 180 },
+    { name: 'Incline DB press', repRangeTop: 10, repRangeBottom: 8, equipment: 'dumbbell', restSec: 150 },
+    { name: 'Dips / machine press', repRangeTop: 10, equipment: 'machine', restSec: 120 },
+    { name: 'Cable fly', repRangeTop: 15, repRangeBottom: 12, equipment: 'machine', restSec: 75 },
+    { name: 'Overhead tricep ext', repRangeTop: 12, repRangeBottom: 10, equipment: 'machine', restSec: 90 },
   ],
 };
 
+/** The one session type whose exercise list can never be edited. */
+export const LOCKED_SESSION = 'legs';
+
+// Non-null: it's a key defined directly in DEFAULT_EXERCISE_PLANS above.
+const LOCKED_EXERCISES = DEFAULT_EXERCISE_PLANS[LOCKED_SESSION]!;
+
 export async function getExercisePlans(): Promise<ExercisePlans> {
-  return (await get<ExercisePlans>('exercisePlans')) ?? DEFAULT_EXERCISE_PLANS;
+  const stored = await get<ExercisePlans>('exercisePlans');
+  if (!stored) return DEFAULT_EXERCISE_PLANS;
+  // Legs stays exactly the seed list regardless of what's stored — a guard
+  // against the locked list ever having been changed by an older build.
+  return { ...stored, [LOCKED_SESSION]: LOCKED_EXERCISES };
 }
 
 export function saveExercisePlans(p: ExercisePlans): Promise<void> {
-  return set('exercisePlans', p);
+  // Same guard on the way in: legs cannot be edited, full stop.
+  return set('exercisePlans', { ...p, [LOCKED_SESSION]: LOCKED_EXERCISES });
+}
+
+// ── Training: atomic, serialized mutations ─────────────────────────────────
+//
+// Every write to trainingState — auto-passing a rest day, finishing a
+// session, undoing that finish, or manually overriding what's next — goes
+// through this one queue. Two of these firing close together (a background
+// day-boundary check landing while a "Finish session" tap is mid-flight, for
+// instance) must never compound into more than the semantically correct
+// change; serializing them here is what guarantees the pointer only ever
+// moves the amount each individual action is supposed to move it.
+
+let trainingQueue: Promise<unknown> = Promise.resolve();
+
+function queueTraining<T>(fn: () => Promise<T>): Promise<T> {
+  const run = trainingQueue.then(fn);
+  trainingQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/** Let any elapsed rest days pass. Safe to call on every app open. */
+export function autoPassRestDays(today: string): Promise<TrainingState> {
+  return queueTraining(async () => {
+    const fresh = await getTrainingState();
+    const next = passRestDays(fresh, today);
+    if (next !== fresh) await saveTrainingState(next);
+    return next;
+  });
+}
+
+/**
+ * Record of the most recent "finish session", kept only so the undo
+ * affordance on Home knows whether there's anything to undo today, and so
+ * undoing can restore the EXACT prior state rather than guessing "pointer
+ * minus one" — a guess that could be wrong if something else touched the
+ * queue in between.
+ */
+export interface LastFinish {
+  date: string; // ISODate — the undo banner only shows while this is today
+  sessionType: string;
+  workoutId: number;
+  priorState: TrainingState;
+}
+
+export async function getLastFinish(): Promise<LastFinish | undefined> {
+  // Cleared by storing null explicitly (see saveLastFinish); normalize that
+  // back to undefined so callers only ever check one "nothing here" value.
+  return (await get<LastFinish | null>('lastFinish')) ?? undefined;
+}
+
+function saveLastFinish(f: LastFinish | null): Promise<void> {
+  return set('lastFinish', f);
+}
+
+/**
+ * Finish a session: save its exercises (creating the workout row, or
+ * updating it if this session was already logged today — e.g. after an
+ * undo brought the user back to keep editing) and advance the pointer by
+ * exactly one. Reads the CURRENT state fresh, inside the queue, rather than
+ * trusting whatever the caller's UI last rendered — a screen that's been
+ * open a while must not be able to advance the queue from a stale snapshot.
+ */
+export function finishTrainingSession(
+  today: string,
+  sessionType: string,
+  exercises: WorkoutExercise[],
+): Promise<LastFinish> {
+  return queueTraining(async () => {
+    const fresh = await getTrainingState();
+    const passed = passRestDays(fresh, today);
+
+    const existing = await db.workouts
+      .where({ date: today, sessionType })
+      .first();
+    const workoutId = existing
+      ? (await db.workouts.update(existing.id as number, { exercises }), existing.id as number)
+      : ((await db.workouts.add({ date: today, sessionType, exercises })) as number);
+
+    const next = advanceAfterSession(passed, today);
+    await saveTrainingState(next);
+
+    const record: LastFinish = { date: today, sessionType, workoutId, priorState: passed };
+    await saveLastFinish(record);
+    return record;
+  });
+}
+
+/**
+ * Undo the last finish: put the pointer back exactly where it was — from
+ * the stored snapshot, not a recomputed guess — and clear the record, since
+ * once undone there's nothing left to undo. The workout row is left alone;
+ * re-opening that session finds it and edits it in place rather than
+ * duplicating it.
+ */
+export function undoLastFinish(): Promise<void> {
+  return queueTraining(async () => {
+    const record = await getLastFinish();
+    if (!record) return;
+    await saveTrainingState(record.priorState);
+    await saveLastFinish(null);
+  });
+}
+
+/**
+ * Manually skip today's rest slot ahead, without logging a workout — there's
+ * nothing to save or later reopen, just the plan moving on a day early
+ * because you asked it to.
+ */
+export function skipRestDay(today: string): Promise<TrainingState> {
+  return queueTraining(async () => {
+    const fresh = await getTrainingState();
+    const passed = passRestDays(fresh, today);
+    const next = advanceAfterSession(passed, today);
+    await saveTrainingState(next);
+    return next;
+  });
+}
+
+/**
+ * Manual override: jump the pointer to the nearest occurrence of
+ * `sessionType` in the split. For training out of order or fixing a missed
+ * week yourself — two taps, no code.
+ */
+export function overrideNextSession(sessionType: string, today: string): Promise<TrainingState> {
+  return queueTraining(async () => {
+    const fresh = await getTrainingState();
+    const next = overrideToSession(fresh, sessionType, today);
+    await saveTrainingState(next);
+    return next;
+  });
+}
+
+/** The workout already logged today for this session type, if any — used to
+ * re-open (rather than duplicate) a session, including right after undo. */
+export function getWorkoutFor(date: string, sessionType: string): Promise<Workout | undefined> {
+  return db.workouts.where({ date, sessionType }).first();
+}
+
+/** Delete a past session outright. Routed through the same queue as every
+ * other training write so it can't land mid-finish and clobber an upsert. */
+export function deleteWorkout(id: number): Promise<void> {
+  return queueTraining(async () => {
+    await db.workouts.delete(id);
+    // Deleting the session the undo banner points at retires the banner —
+    // there's nothing left to reopen.
+    const record = await getLastFinish();
+    if (record?.workoutId === id) await saveLastFinish(null);
+  });
+}
+
+/** Update a past session's logged sets from the history editor. */
+export function updateWorkout(id: number, exercises: WorkoutExercise[]): Promise<void> {
+  return queueTraining(async () => {
+    await db.workouts.update(id, { exercises });
+  });
 }
 
 // ── Weight & composition ──────────────────────────────────────────────────

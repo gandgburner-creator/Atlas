@@ -5,12 +5,14 @@ import {
   currentSlot,
   lastTimeFor,
   overloadHint,
+  overrideToSession,
   passRestDays,
   sessionFor,
 } from './training';
 import type { Workout } from '../db/schema';
 
 const base: TrainingState = { ...DEFAULT_TRAINING_STATE };
+const SPLIT = ['back', 'shoulders', 'rest', 'legs', 'chest', 'rest'];
 // split: ['back','shoulders','rest','legs','chest','rest']
 
 describe('the queue', () => {
@@ -18,6 +20,18 @@ describe('the queue', () => {
     expect(currentSlot(base)).toBe('back');
     const after = advanceAfterSession(base, '2026-08-03');
     expect(currentSlot(after)).toBe('shoulders');
+  });
+
+  it('advances by exactly one position from every starting slot, wrapping at the end', () => {
+    // Regression coverage for the reported bug: finishing 'back' must land
+    // on 'shoulders', never skip ahead to 'legs' or 'chest'. Checked from
+    // every position in the split, not just the one that was reported.
+    SPLIT.forEach((_, i) => {
+      const s: TrainingState = { ...base, pointer: i };
+      const after = advanceAfterSession(s, '2026-08-03');
+      expect(after.pointer).toBe(i + 1);
+      expect(currentSlot(after)).toBe(SPLIT[(i + 1) % SPLIT.length]);
+    });
   });
 
   it('does NOT advance on a skipped day — the session is simply next tomorrow', () => {
@@ -50,6 +64,15 @@ describe('the queue', () => {
     expect(currentSlot(twoDays)).toBe('legs');
   });
 
+  it('a rest-day pass never advances more than one slot even with a large day gap', () => {
+    // Long-stale lastRestPass (weeks ago) must still stop at the very next
+    // non-rest slot — passRestDays is not a substitute for "Finish session".
+    const s: TrainingState = { ...base, pointer: 2, lastRestPass: '2026-07-01' };
+    const next = passRestDays(s, '2026-08-20');
+    expect(currentSlot(next)).toBe('legs');
+    expect(next.pointer).toBe(3);
+  });
+
   it('wraps around the split', () => {
     let s = { ...base, pointer: 5 }; // final rest slot
     s = advanceAfterSession(s, '2026-08-02');
@@ -71,6 +94,25 @@ describe('the queue', () => {
     const s: TrainingState = { ...base, mode: 'fixed' };
     expect(sessionFor(s, '2026-08-03')).toBe('back'); // Monday
     expect(sessionFor(s, '2026-08-05')).toBe('rest'); // Wednesday
+  });
+});
+
+describe('manual override', () => {
+  it('jumps to the nearest occurrence of a session type, searching forward', () => {
+    // From 'back' (0), the nearest 'rest' is index 2, not index 5.
+    const s = overrideToSession(base, 'rest', '2026-08-03');
+    expect(s.pointer).toBe(2);
+  });
+
+  it('wraps to find a session type behind the current pointer', () => {
+    // From pointer 4 (chest), the nearest 'back' wraps around to index 0.
+    const s = overrideToSession({ ...base, pointer: 4 }, 'back', '2026-08-03');
+    expect(currentSlot(s)).toBe('back');
+  });
+
+  it('is a no-op for a session type not in the split', () => {
+    const s = overrideToSession(base, 'arms', '2026-08-03');
+    expect(s).toBe(base);
   });
 });
 
@@ -100,10 +142,15 @@ describe('last time', () => {
     // An exercise skipped last session still shows its older numbers.
     expect(map.get('Incline DB')?.date).toBe('2026-07-25');
   });
+
+  it('excludes the date being edited, so re-opening today does not show itself', () => {
+    const map = lastTimeFor(workouts, 'chest', '2026-08-01');
+    expect(map.get('Bench press')?.date).toBe('2026-07-25');
+  });
 });
 
 describe('overload hint', () => {
-  const bench = { name: 'Bench press', repRangeTop: 8, equipment: 'barbell' as const };
+  const bench = { name: 'Bench press', repRangeTop: 8, equipment: 'barbell' as const, restSec: 180 };
 
   it('suggests +2.5kg on a barbell when every set hit the top', () => {
     const hint = overloadHint(
@@ -121,19 +168,63 @@ describe('overload hint', () => {
     expect(hint).toBeNull();
   });
 
+  it('never comments when the load or reps dropped from last time — a deficit makes that normal', () => {
+    // Fewer reps than the range top, or a lighter weight than usual: silence
+    // either way, never a warning.
+    const dropped = overloadHint(
+      { name: 'Bench press', date: '2026-08-01', sets: [{ reps: 5, weight: 75 }] },
+      bench,
+    );
+    expect(dropped).toBeNull();
+  });
+
   it('suggests the next dumbbell up, not +2.5', () => {
     const hint = overloadHint(
       { name: 'DB press', date: '2026-08-01', sets: [{ reps: 8, weight: 22.5 }] },
-      { name: 'DB press', repRangeTop: 8, equipment: 'dumbbell' },
+      { name: 'DB press', repRangeTop: 8, equipment: 'dumbbell', restSec: 150 },
     );
     expect(hint?.weight).toBe(25);
   });
 
-  it('suggests reps, not load, for bodyweight work', () => {
+  it('names the pin, not an invented number, for cable/machine work', () => {
     const hint = overloadHint(
-      { name: 'Pull-ups', date: '2026-08-01', sets: [{ reps: 10, weight: 0 }] },
-      { name: 'Pull-ups', repRangeTop: 10, equipment: 'bodyweight' },
+      { name: 'Lat pulldown', date: '2026-08-01', sets: [{ reps: 12, weight: 50 }] },
+      { name: 'Lat pulldown', repRangeTop: 12, equipment: 'machine', restSec: 120 },
+    );
+    expect(hint?.weight).toBeNull();
+    expect(hint?.text).toContain('pin');
+  });
+
+  it('suggests reps, not load, for ordinary bodyweight work', () => {
+    const hint = overloadHint(
+      { name: 'Dips', date: '2026-08-01', sets: [{ reps: 10, weight: 0 }] },
+      { name: 'Dips', repRangeTop: 10, equipment: 'bodyweight', restSec: 120 },
     );
     expect(hint?.text).toContain('11 reps');
+  });
+
+  it('suggests adding weight for pull-ups once the rep ceiling clears on every set', () => {
+    const hint = overloadHint(
+      {
+        name: 'Pull-ups',
+        date: '2026-08-01',
+        sets: [
+          { reps: 12, weight: 0 },
+          { reps: 12, weight: 0 },
+          { reps: 12, weight: 0 },
+          { reps: 12, weight: 0 },
+        ],
+      },
+      { name: 'Pull-ups', repRangeTop: 12, equipment: 'bodyweight', restSec: 180, progressToWeighted: true },
+    );
+    expect(hint?.text).toContain('adding weight');
+  });
+
+  it('stays quiet on pull-ups below the 12-rep ceiling', () => {
+    const hint = overloadHint(
+      { name: 'Pull-ups', date: '2026-08-01', sets: [{ reps: 9, weight: 0 }] },
+      { name: 'Pull-ups', repRangeTop: 12, equipment: 'bodyweight', restSec: 180, progressToWeighted: true },
+    );
+    expect(hint).toBeNull();
   });
 });
