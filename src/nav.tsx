@@ -21,6 +21,8 @@ export type Tab = 'today' | 'body' | 'work' | 'craft' | 'life' | 'progress';
 export type Route =
   | { name: 'sleep' }
   | { name: 'training-log' }
+  | { name: 'training-history' }
+  | { name: 'training-session'; id: number }
   | { name: 'inbody-form' }
   | { name: 'inbody-detail'; id: number }
   | { name: 'projection' }

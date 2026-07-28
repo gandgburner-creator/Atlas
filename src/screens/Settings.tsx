@@ -13,6 +13,7 @@ import {
   getLeanMassKg,
   getTrainingState,
   getWeightPlan,
+  overrideNextSession,
   saveCalorieTarget,
   saveCraftGoalMin,
   saveFocusGoalMin,
@@ -26,6 +27,7 @@ import {
   type CommitmentOverrides,
 } from '../domain/commitments';
 import type { RampConfig } from '../domain/ramp';
+import { currentSlot, passRestDays } from '../domain/training';
 import { formatHours } from '../domain/today';
 
 interface Props {
@@ -66,6 +68,7 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
       </p>
 
       <CommitmentsEditor overrides={data.overrides} currentWeek={currentWeek} />
+      <NextSessionEditor training={data.training} today={today} />
       <SplitEditor training={data.training} />
       <TargetsEditor
         kcal={data.kcal}
@@ -159,6 +162,50 @@ function CommitmentsEditor({
             </div>
           );
         })}
+      </div>
+    </SketchCard>
+  );
+}
+
+// ── Next session override ───────────────────────────────────────────────
+
+/**
+ * Trained out of order, or missed a week? Fix it yourself in two taps: pick
+ * what's actually next, and the queue jumps to the nearest occurrence of it
+ * without touching anything before that point.
+ */
+function NextSessionEditor({
+  training,
+  today,
+}: {
+  training: Awaited<ReturnType<typeof getTrainingState>>;
+  today: string;
+}) {
+  const passed = passRestDays(training, today);
+  const current = currentSlot(passed);
+  const slotTypes = [...new Set(training.split)];
+
+  return (
+    <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
+      <div className="flex items-baseline justify-between">
+        <span className="hand text-[26px]">next session</span>
+        <span className="tnum caption font-semibold">{current}</span>
+      </div>
+      <p className="caption mt-0.5">
+        Not what you expect? Pick the right one — the queue jumps to it.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {slotTypes.map((t) => (
+          <button
+            key={t}
+            onClick={() => overrideNextSession(t, today)}
+            disabled={t === current}
+            className="relative px-4 py-2 text-[14px] font-semibold disabled:opacity-40"
+          >
+            <SketchBorder radius={999} strokeWidth={1.8} stroke="var(--rule)" />
+            <span className="relative">{t}</span>
+          </button>
+        ))}
       </div>
     </SketchCard>
   );

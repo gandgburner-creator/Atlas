@@ -2,15 +2,13 @@ import { useEffect, useState } from 'react';
 import { Icon, type IconName } from './components/Icon';
 import { SketchDefs } from './components/Sketch';
 import {
+  autoPassRestDays,
   getRamp,
-  getTrainingState,
   getTutorialSeen,
-  saveTrainingState,
   setTutorialSeen,
 } from './db/config';
 import type { RampConfig } from './domain/ramp';
 import { todayISO } from './domain/time';
-import { passRestDays } from './domain/training';
 import { NavProvider, useNav, type Tab } from './nav';
 import { BodyScreen } from './screens/Body';
 import { CraftScreen } from './screens/Craft';
@@ -23,7 +21,9 @@ import { Projection } from './screens/Projection';
 import { Settings } from './screens/Settings';
 import { Today as SleepToday } from './screens/Today';
 import { Tutorial } from './screens/Tutorial';
+import { TrainingHistory } from './screens/TrainingHistory';
 import { TrainingLog } from './screens/TrainingLog';
+import { TrainingSession } from './screens/TrainingSession';
 import { WorkScreen } from './screens/Work';
 import { PushHeader } from './components/Chrome';
 
@@ -70,17 +70,12 @@ function Shell({
 }) {
   const nav = useNav();
 
-  // Rest days pass at the day boundary; persist the advanced pointer once.
+  // Rest days pass at the day boundary. Routed through the same serialized
+  // queue as every other training-state write (see db/config.ts) so this
+  // can never race with a "Finish session" tap and compound into more than
+  // one step of pointer movement.
   useEffect(() => {
-    let live = true;
-    (async () => {
-      const s = await getTrainingState();
-      const next = passRestDays(s, today);
-      if (live && next !== s) await saveTrainingState(next);
-    })();
-    return () => {
-      live = false;
-    };
+    void autoPassRestDays(today);
   }, [today]);
 
   const pushed = nav.top;
@@ -96,6 +91,10 @@ function Shell({
             </div>
           ) : pushed.name === 'training-log' ? (
             <TrainingLog today={today} />
+          ) : pushed.name === 'training-history' ? (
+            <TrainingHistory />
+          ) : pushed.name === 'training-session' ? (
+            <TrainingSession id={pushed.id} />
           ) : pushed.name === 'inbody-form' ? (
             <InBodyForm today={today} />
           ) : pushed.name === 'inbody-detail' ? (
