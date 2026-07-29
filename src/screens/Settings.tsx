@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
-import { NumberField, parseNum, PushHeader } from '../components/Chrome';
+import { NumberField, parseNum, PushHeader, YesNo } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
 import { TimeField } from '../components/TimeField';
 import { useNav } from '../nav';
@@ -10,22 +10,32 @@ import {
   getCommitmentOverrides,
   getCraftGoalMin,
   updateCommitmentOverride,
+  getFatTarget,
   getFocusGoalMin,
   getLeanMassKg,
+  getModuleFlags,
+  getProteinTarget,
   getTrainingState,
   getWeightPlan,
   overrideNextSession,
   saveCalorieTarget,
   saveCraftGoalMin,
+  saveFatTarget,
   saveFocusGoalMin,
+  saveModuleFlags,
+  saveProteinTarget,
   saveRamp,
   saveTrainingState,
   saveWeightPlan,
+  type MacroRange,
 } from '../db/config';
 import {
   COMMITMENT_DEFS,
+  COMMITMENT_MODULE,
+  MODULE_DEFS,
   rampWeekOn,
   type CommitmentOverrides,
+  type ModuleFlags,
 } from '../domain/commitments';
 import type { RampConfig } from '../domain/ramp';
 import { currentSlot, passRestDays } from '../domain/training';
@@ -46,17 +56,31 @@ interface Props {
 export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props) {
   const nav = useNav();
   const data = useLiveQuery(async () => {
-    const [overrides, training, kcal, focusMin, craftMin, plan, lean] =
+    const [overrides, training, kcal, proteinTarget, fatTarget, focusMin, craftMin, plan, lean, moduleFlags] =
       await Promise.all([
         getCommitmentOverrides(),
         getTrainingState(),
         getCalorieTarget(),
+        getProteinTarget(),
+        getFatTarget(),
         getFocusGoalMin(),
         getCraftGoalMin(),
         getWeightPlan(),
         getLeanMassKg(),
+        getModuleFlags(),
       ]);
-    return { overrides: overrides ?? {}, training, kcal, focusMin, craftMin, plan, lean };
+    return {
+      overrides: overrides ?? {},
+      training,
+      kcal,
+      proteinTarget,
+      fatTarget,
+      focusMin,
+      craftMin,
+      plan,
+      lean,
+      moduleFlags,
+    };
   }, []);
 
   if (!data) return null;
@@ -69,15 +93,23 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
         ramp week {Math.max(0, currentWeek)} · started {ramp.startDate}
       </p>
 
-      <CommitmentsEditor overrides={data.overrides} currentWeek={currentWeek} />
+      <ModulesEditor flags={data.moduleFlags} />
+      <CommitmentsEditor
+        overrides={data.overrides}
+        currentWeek={currentWeek}
+        moduleFlags={data.moduleFlags}
+      />
       <NextSessionEditor training={data.training} today={today} />
       <SplitEditor training={data.training} />
       <TargetsEditor
         kcal={data.kcal}
+        proteinTarget={data.proteinTarget}
+        fatTarget={data.fatTarget}
         focusMin={data.focusMin}
         craftMin={data.craftMin}
         plan={data.plan}
         lean={data.lean}
+        moduleFlags={data.moduleFlags}
       />
       <RampEditor ramp={ramp} onRampChange={onRampChange} />
 
@@ -106,26 +138,70 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
   );
 }
 
+// ── Modules ───────────────────────────────────────────────────────────────
+
+/**
+ * Master switches. Nothing behind a flag is deleted — the screens, the
+ * Dexie tables, the ramp week they'd resume at are all still there. This
+ * only decides whether they're currently part of the app you see.
+ */
+function ModulesEditor({ flags }: { flags: ModuleFlags }) {
+  function set(id: keyof ModuleFlags, v: boolean) {
+    void saveModuleFlags({ ...flags, [id]: v });
+  }
+
+  return (
+    <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
+      <span className="hand text-[26px]">modules</span>
+      <p className="caption mt-0.5">
+        Off doesn't mean gone — nothing is deleted, and switching one back on
+        picks up exactly where it left off.
+      </p>
+      <div className="mt-3 flex flex-col">
+        {MODULE_DEFS.map((m) => (
+          <div
+            key={m.id}
+            className="flex items-center gap-3 border-b-[1.5px] border-dashed border-[var(--rule)] py-2.5 last:border-0"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="hand truncate text-[22px]">{m.label}</p>
+              <p className="caption truncate">{m.hint}</p>
+            </div>
+            <YesNo value={flags[m.id]} onChange={(v) => set(m.id, v)} />
+          </div>
+        ))}
+      </div>
+    </SketchCard>
+  );
+}
+
 // ── Commitments ───────────────────────────────────────────────────────────
 
 function CommitmentsEditor({
   overrides,
   currentWeek,
+  moduleFlags,
 }: {
   overrides: CommitmentOverrides;
   currentWeek: number;
+  moduleFlags: ModuleFlags;
 }) {
   // Serialized in the config layer so rapid taps each land.
   const update = updateCommitmentOverride;
+  // Fine-tuning only makes sense for what's currently switched on.
+  const visibleDefs = COMMITMENT_DEFS.filter((def) => {
+    const moduleKey = COMMITMENT_MODULE[def.id];
+    return !moduleKey || moduleFlags[moduleKey];
+  });
 
   return (
     <SketchCard className="px-4 pt-4 pb-4">
       <span className="hand text-[26px]">commitments</span>
       <p className="caption mt-0.5">
-        Every module always works. These decide what counts, and from when.
+        Every active module already works. These decide what counts, and from when.
       </p>
       <div className="mt-3 flex flex-col">
-        {COMMITMENT_DEFS.map((def) => {
+        {visibleDefs.map((def) => {
           const o = overrides[def.id] ?? {};
           const week = o.week ?? def.defaultWeek;
           const disabled = o.disabled ?? false;
@@ -312,18 +388,28 @@ function SplitEditor({ training }: { training: Awaited<ReturnType<typeof getTrai
 
 function TargetsEditor({
   kcal,
+  proteinTarget,
+  fatTarget,
   focusMin,
   craftMin,
   plan,
   lean,
+  moduleFlags,
 }: {
   kcal: number;
+  proteinTarget: MacroRange;
+  fatTarget: MacroRange;
   focusMin: number;
   craftMin: number;
   plan: Awaited<ReturnType<typeof getWeightPlan>>;
   lean: number;
+  moduleFlags: ModuleFlags;
 }) {
   const [kcalV, setKcalV] = useState(String(kcal));
+  const [proteinMinV, setProteinMinV] = useState(String(proteinTarget.min));
+  const [proteinMaxV, setProteinMaxV] = useState(String(proteinTarget.max));
+  const [fatMinV, setFatMinV] = useState(String(fatTarget.min));
+  const [fatMaxV, setFatMaxV] = useState(String(fatTarget.max));
   const [focusV, setFocusV] = useState(String(focusMin));
   const [craftV, setCraftV] = useState(String(craftMin));
   const [targetKgV, setTargetKgV] = useState(String(plan.targetKg));
@@ -332,6 +418,12 @@ function TargetsEditor({
   async function save() {
     const k = parseNum(kcalV);
     if (k) await saveCalorieTarget(Math.round(k));
+    const pMin = parseNum(proteinMinV);
+    const pMax = parseNum(proteinMaxV);
+    if (pMin && pMax) await saveProteinTarget({ min: Math.round(pMin), max: Math.round(pMax) });
+    const fMin = parseNum(fatMinV);
+    const fMax = parseNum(fatMaxV);
+    if (fMin && fMax) await saveFatTarget({ min: Math.round(fMin), max: Math.round(fMax) });
     const f = parseNum(focusV);
     if (f) await saveFocusGoalMin(Math.round(f));
     const c = parseNum(craftV);
@@ -348,8 +440,16 @@ function TargetsEditor({
       <div className="mt-3 grid grid-cols-2 gap-3">
         <NumberField label="calories" unit="kcal" value={kcalV} onChange={setKcalV} integer />
         <NumberField label="target weight" unit="kg" value={targetKgV} onChange={setTargetKgV} />
-        <NumberField label="focus / day" unit="min" value={focusV} onChange={setFocusV} integer />
-        <NumberField label="craft / day" unit="min" value={craftV} onChange={setCraftV} integer />
+        <NumberField label="protein min" unit="g" value={proteinMinV} onChange={setProteinMinV} integer />
+        <NumberField label="protein max" unit="g" value={proteinMaxV} onChange={setProteinMaxV} integer />
+        <NumberField label="fat min" unit="g" value={fatMinV} onChange={setFatMinV} integer />
+        <NumberField label="fat max" unit="g" value={fatMaxV} onChange={setFatMaxV} integer />
+        {moduleFlags.work && (
+          <NumberField label="focus / day" unit="min" value={focusV} onChange={setFocusV} integer />
+        )}
+        {moduleFlags.craft && (
+          <NumberField label="craft / day" unit="min" value={craftV} onChange={setCraftV} integer />
+        )}
         <label className="col-span-2 flex flex-col gap-1.5">
           <span className="hand text-[21px] text-[var(--ink-muted)]">target date</span>
           <input
@@ -362,8 +462,11 @@ function TargetsEditor({
         </label>
       </div>
       <p className="tnum caption mt-2">
-        lean mass {lean.toFixed(1)} kg — maintained by InBody readings ·
-        goals today: focus {formatHours(focusMin)}, craft {formatHours(craftMin)}
+        lean mass {lean.toFixed(1)} kg — maintained by InBody readings
+        {(moduleFlags.work || moduleFlags.craft) && ' · goals today: '}
+        {moduleFlags.work && `focus ${formatHours(focusMin)}`}
+        {moduleFlags.work && moduleFlags.craft && ', '}
+        {moduleFlags.craft && `craft ${formatHours(craftMin)}`}
       </p>
       <Button variant="secondary" className="mt-3 w-full" onClick={save}>
         Save targets

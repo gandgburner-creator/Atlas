@@ -3,10 +3,12 @@ import {
   type ConfigEntry,
   type CraftItem,
   type FocusSession,
+  type FoodItem,
   type FoodLog,
   type InBodyReading,
   type Letter,
   type LifeLog,
+  type Plate,
   type SleepLog,
   type WeightLog,
   type Workout,
@@ -44,6 +46,8 @@ export interface AtlasBackup {
   craftItems: CraftItem[];
   letters: Letter[];
   config: ConfigEntry[];
+  foodItems: FoodItem[];
+  plates: Plate[];
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -81,6 +85,8 @@ export async function buildBackup(
     craftItems,
     letters,
     config,
+    foodItems,
+    plates,
   ] = await Promise.all([
     db.sleepLogs.toArray(),
     db.weightLogs.toArray(),
@@ -93,6 +99,8 @@ export async function buildBackup(
     db.craftItems.toArray(),
     db.letters.toArray(),
     db.config.toArray(),
+    db.foodItems.toArray(),
+    db.plates.toArray(),
   ]);
 
   const photos: PhotoBackup[] = includePhotos
@@ -122,6 +130,8 @@ export async function buildBackup(
     craftItems,
     letters,
     config,
+    foodItems,
+    plates,
   };
 }
 
@@ -157,6 +167,8 @@ export async function restoreBackup(data: AtlasBackup): Promise<void> {
       db.craftItems,
       db.letters,
       db.config,
+      db.foodItems,
+      db.plates,
     ],
     async () => {
       await Promise.all([
@@ -171,6 +183,8 @@ export async function restoreBackup(data: AtlasBackup): Promise<void> {
         db.craftItems.clear(),
         db.letters.clear(),
         db.config.clear(),
+        db.foodItems.clear(),
+        db.plates.clear(),
       ]);
 
       await Promise.all([
@@ -184,6 +198,9 @@ export async function restoreBackup(data: AtlasBackup): Promise<void> {
         db.craftItems.bulkAdd(data.craftItems),
         db.letters.bulkAdd(data.letters),
         db.config.bulkAdd(data.config),
+        // Absent on a backup made before the food rebuild — restore what exists.
+        db.foodItems.bulkAdd(data.foodItems ?? []),
+        db.plates.bulkAdd(data.plates ?? []),
       ]);
 
       if (data.photosIncluded && data.photos.length > 0) {

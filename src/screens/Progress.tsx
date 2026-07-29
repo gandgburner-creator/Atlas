@@ -5,6 +5,7 @@ import { Button } from '../components/Button';
 import { DashedRule, SketchBorder, SketchCard } from '../components/Sketch';
 import { getWeightPlan } from '../db/config';
 import { db } from '../db/schema';
+import type { ModuleFlags } from '../domain/commitments';
 import {
   isRampComplete,
   isWeekRepeated,
@@ -21,6 +22,7 @@ import { WeightChart } from './WeightChart';
 interface Props {
   ramp: RampConfig;
   today: string;
+  moduleFlags: ModuleFlags;
 }
 
 function Stat({
@@ -43,7 +45,7 @@ function Stat({
   );
 }
 
-export function Progress({ ramp, today }: Props) {
+export function Progress({ ramp, today, moduleFlags }: Props) {
   const logs = useLiveQuery(() => allSleepLogs(), []);
 
   const weekStart = weekStartOf(today);
@@ -165,11 +167,20 @@ export function Progress({ ramp, today }: Props) {
           value={String(other?.workouts.length ?? 0)}
           sub="lifted this week"
         />
-        <Stat
-          label="focus"
-          value={formatHours(Math.round(focusMin('work')))}
-          sub={`craft ${formatHours(Math.round(focusMin('craft')))} this week`}
-        />
+        {moduleFlags.work && (
+          <Stat
+            label="focus"
+            value={formatHours(Math.round(focusMin('work')))}
+            sub="this week"
+          />
+        )}
+        {moduleFlags.craft && (
+          <Stat
+            label="craft"
+            value={formatHours(Math.round(focusMin('craft')))}
+            sub="this week"
+          />
+        )}
       </section>
 
       {total === 0 && (
@@ -183,7 +194,9 @@ export function Progress({ ramp, today }: Props) {
       )}
 
       {/* ── The letter — handwriting for heading and signature only ────── */}
-      <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
+      {moduleFlags.letter && (
+        <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
+      )}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   getCommitmentOverrides,
   getExportReminder,
   getLastFinish,
+  getModuleFlags,
   getStaleInProgressWorkout,
   saveExportReminder,
   undoLastFinish,
@@ -19,6 +20,7 @@ import {
   ringStates,
   type CommitmentId,
   type ResolvedCommitment,
+  type Section,
 } from '../domain/commitments';
 import type { RampConfig } from '../domain/ramp';
 import { shouldShowExportReminder } from '../domain/reminder';
@@ -47,11 +49,20 @@ const ITEM_TAB: Record<CommitmentId, Tab> = {
   wake_time: 'today',
   training_log: 'body',
   weight_log: 'body',
-  nutrition: 'body',
+  nutrition: 'food',
   rest_block: 'life',
   calls: 'life',
   focus_hours: 'work',
   craft_hours: 'craft',
+};
+
+/** Where a tap on a ring lands — train/rest live where they always did;
+ * fuel goes to Food, the more frequent of its two halves. */
+const RING_TAB: Record<Section, Tab> = {
+  train: 'body',
+  rest: 'today',
+  fuel: 'food',
+  other: 'today',
 };
 
 export function Home({ ramp, today }: Props) {
@@ -70,11 +81,12 @@ export function Home({ ramp, today }: Props) {
     // surfaced here with a choice.
     const stale = await getStaleInProgressWorkout(today);
     const exportReminder = await getExportReminder();
-    return { overrides, summary, lastFinish, stale, exportReminder };
+    const moduleFlags = await getModuleFlags();
+    return { overrides, summary, lastFinish, stale, exportReminder, moduleFlags };
   }, [today]);
 
   if (!data) return null;
-  const { overrides, summary, lastFinish, stale, exportReminder } = data;
+  const { overrides, summary, lastFinish, stale, exportReminder, moduleFlags } = data;
   const canUndo = lastFinish?.date === today;
   const weekStart = weekStartOf(today);
   const showExportReminder = shouldShowExportReminder(exportReminder, today, weekStart);
@@ -109,8 +121,8 @@ export function Home({ ramp, today }: Props) {
     }
   }
 
-  const rings = ringStates(ramp.startDate, today, overrides, summary.doneIds);
-  const commitments = resolveCommitments(ramp.startDate, today, overrides);
+  const rings = ringStates(ramp.startDate, today, overrides, summary.doneIds, moduleFlags);
+  const commitments = resolveCommitments(ramp.startDate, today, overrides, moduleFlags);
   const active = commitments.filter((c) => c.active);
   const upcoming = commitments.filter((c) => c.upcoming);
 
@@ -157,13 +169,13 @@ export function Home({ ramp, today }: Props) {
         </button>
       </header>
 
-      {/* Four rings. Greyed = nothing scheduled, never a failure. */}
+      {/* Three rings: train, rest, fuel. Greyed = nothing scheduled, never a failure. */}
       <SketchCard className="px-3 pt-5 pb-4">
-        <div className="grid grid-cols-4">
+        <div className="grid grid-cols-3">
           {rings.map((r) => (
             <button
               key={r.section}
-              onClick={() => nav.setTab(r.section as Tab)}
+              onClick={() => nav.setTab(RING_TAB[r.section])}
               className="flex flex-col items-center"
             >
               <Ring

@@ -58,6 +58,11 @@ const PATHS: Record<string, string[]> = {
   ],
   check: ['M4.5 12.8 9.6 18 20 6.4'],
   back: ['M14.5 4.5 7 12l7.5 7.5'],
+  // Not on the sheet: favourite and search marks, same hand as the rest.
+  star: [
+    'M12 3 14.2 8.9 20.6 9.2 15.6 13.2 17.3 19.3 12 15.8 6.7 19.3 8.4 13.2 3.4 9.2 9.8 8.9Z',
+  ],
+  search: ['M10.4 3.6a6.8 6.8 0 1 0 0 13.6 6.8 6.8 0 0 0 0-13.6z', 'M15.8 15.8 20.4 20.4'],
   // Not on the sheet: a home mark for the Today tab, drawn in the same
   // 2.4px hand as the rest of the set.
   home: ['M4 11.2 12 3.6l8 7.6', 'M6.2 9.6V20h11.6V9.6', 'M10 20v-6h4v6'],

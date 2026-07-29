@@ -1,19 +1,26 @@
 import { useEffect, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Icon, type IconName } from './components/Icon';
 import { SketchDefs } from './components/Sketch';
 import {
   autoPassRestDays,
+  getModuleFlags,
   getRamp,
   getTutorialSeen,
   setTutorialSeen,
 } from './db/config';
+import { seedFoodDatabase } from './db/foods';
+import { DEFAULT_MODULE_FLAGS, type ModuleFlags } from './domain/commitments';
 import type { RampConfig } from './domain/ramp';
 import { todayISO } from './domain/time';
 import { NavProvider, useNav, type Tab } from './nav';
 import { BodyScreen } from './screens/Body';
 import { CraftScreen } from './screens/Craft';
 import { ExportScreen } from './screens/Export';
+import { FoodScreen } from './screens/Food';
+import { FoodEditorScreen } from './screens/FoodEditor';
 import { Home } from './screens/Home';
+import { PlateEditorScreen } from './screens/PlateEditor';
 import { InBodyDetail, InBodyForm } from './screens/InBody';
 import { LifeScreen } from './screens/Life';
 import { Onboarding } from './screens/Onboarding';
@@ -49,12 +56,22 @@ function useToday(): string {
   return date;
 }
 
-const TABS: { id: Tab; icon: IconName; label: string }[] = [
+interface TabDef {
+  id: Tab;
+  icon: IconName;
+  label: string;
+  /** Which module flag gates this tab out of the bottom nav. Always shown
+   * when absent — today/body/food/progress are the fixed four. */
+  module?: keyof ModuleFlags;
+}
+
+const TABS: TabDef[] = [
   { id: 'today', icon: 'home', label: 'today' },
   { id: 'body', icon: 'body', label: 'body' },
-  { id: 'work', icon: 'work', label: 'work' },
-  { id: 'craft', icon: 'craft', label: 'craft' },
-  { id: 'life', icon: 'life', label: 'life' },
+  { id: 'food', icon: 'food', label: 'food' },
+  { id: 'work', icon: 'work', label: 'work', module: 'work' },
+  { id: 'craft', icon: 'craft', label: 'craft', module: 'craft' },
+  { id: 'life', icon: 'life', label: 'life', module: 'life' },
   { id: 'progress', icon: 'board', label: 'progress' },
 ];
 
@@ -78,6 +95,16 @@ function Shell({
   useEffect(() => {
     void autoPassRestDays(today);
   }, [today]);
+
+  // Live so a flag flipped in Settings hides/shows tabs immediately.
+  const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
+  const visibleTabs = TABS.filter((t) => !t.module || moduleFlags[t.module]);
+
+  // A tab switched off from under the user (Settings, another tab) lands
+  // them back on Today rather than showing a bottom nav with no selection.
+  useEffect(() => {
+    if (!visibleTabs.some((t) => t.id === nav.tab)) nav.setTab('today');
+  }, [visibleTabs, nav]);
 
   const pushed = nav.top;
 
@@ -104,6 +131,10 @@ function Shell({
             <Projection today={today} />
           ) : pushed.name === 'export' ? (
             <ExportScreen today={today} />
+          ) : pushed.name === 'food-editor' ? (
+            <FoodEditorScreen id={pushed.id} />
+          ) : pushed.name === 'plate-editor' ? (
+            <PlateEditorScreen id={pushed.id} />
           ) : (
             <Settings
               ramp={ramp}
@@ -115,7 +146,9 @@ function Shell({
         ) : nav.tab === 'today' ? (
           <Home ramp={ramp} today={today} />
         ) : nav.tab === 'body' ? (
-          <BodyScreen today={today} />
+          <BodyScreen today={today} moduleFlags={moduleFlags} />
+        ) : nav.tab === 'food' ? (
+          <FoodScreen today={today} />
         ) : nav.tab === 'work' ? (
           <WorkScreen today={today} />
         ) : nav.tab === 'craft' ? (
@@ -123,14 +156,15 @@ function Shell({
         ) : nav.tab === 'life' ? (
           <LifeScreen today={today} />
         ) : (
-          <Progress ramp={ramp} today={today} />
+          <Progress ramp={ramp} today={today} moduleFlags={moduleFlags} />
         )}
       </main>
 
-      {/* Bottom nav: the four sections plus progress, home on the left. */}
+      {/* Bottom nav: active modules only — hidden ones stay off until
+          switched back on in settings, never deleted. */}
       {!pushed && (
         <nav className="pb-safe sticky bottom-0 flex bg-[var(--board)] pt-2">
-          {TABS.map((t) => {
+          {visibleTabs.map((t) => {
             const on = nav.tab === t.id;
             return (
               <button
@@ -170,7 +204,7 @@ export default function App() {
   const today = useToday();
 
   useEffect(() => {
-    Promise.all([getRamp(), getTutorialSeen()])
+    Promise.all([getRamp(), getTutorialSeen(), seedFoodDatabase()])
       .then(([r, seen]) => {
         setRamp(r ?? null);
         setTutorialDone(seen);

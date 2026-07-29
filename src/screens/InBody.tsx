@@ -4,8 +4,9 @@ import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader } from '../components/Chrome';
 import { Icon } from '../components/Icon';
 import { DashedRule, SketchCard } from '../components/Sketch';
-import { saveLeanMassKg } from '../db/config';
+import { getModuleFlags, saveLeanMassKg } from '../db/config';
 import { db, type InBodyReading } from '../db/schema';
+import { DEFAULT_MODULE_FLAGS } from '../domain/commitments';
 import { formatDayLabel, todayISO } from '../domain/time';
 import { useNav } from '../nav';
 
@@ -60,6 +61,7 @@ export function InBodyForm({ today }: { today: string }) {
   const [photoPreview, setPhotoPreview] = useState<Blob | null>(null);
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
 
   // The draft row this form is writing to. Created immediately on open, or
   // resumed from whatever was left in progress — either way, by the time
@@ -259,41 +261,45 @@ export function InBodyForm({ today }: { today: string }) {
       <Collapsible id="fat" title="segmental fat" fields={SEG_FAT} />
       <Collapsible id="meta" title="more measurements" fields={METABOLIC} />
 
-      {/* Printout photo */}
-      <SketchCard filter="rough2" className="px-4 py-4">
-        <div className="flex items-center justify-between">
-          <span className="hand text-[22px]">printout photo</span>
-          <Icon name="photo" size={22} stroke="var(--ink-muted)" />
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void attachPhoto(file);
-          }}
-        />
-        {photoPreview ? (
-          <div className="mt-2 flex items-center gap-3">
-            <img
-              src={URL.createObjectURL(photoPreview)}
-              alt="InBody printout"
-              className="h-24 w-16 object-cover"
-              style={{ border: '2px solid var(--rule)' }}
-            />
-            <button onClick={() => void removePhoto()} className="hand text-[19px] text-[var(--ink-muted)]">
-              remove
-            </button>
+      {/* Printout photo — behind its own flag, independent of the rest of
+          InBody, since a photo is the one thing here that leaves the phone
+          if a backup is ever shared. */}
+      {moduleFlags.photos && (
+        <SketchCard filter="rough2" className="px-4 py-4">
+          <div className="flex items-center justify-between">
+            <span className="hand text-[22px]">printout photo</span>
+            <Icon name="photo" size={22} stroke="var(--ink-muted)" />
           </div>
-        ) : (
-          <Button variant="secondary" className="mt-2 w-full" onClick={() => fileRef.current?.click()}>
-            Attach the slip
-          </Button>
-        )}
-      </SketchCard>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void attachPhoto(file);
+            }}
+          />
+          {photoPreview ? (
+            <div className="mt-2 flex items-center gap-3">
+              <img
+                src={URL.createObjectURL(photoPreview)}
+                alt="InBody printout"
+                className="h-24 w-16 object-cover"
+                style={{ border: '2px solid var(--rule)' }}
+              />
+              <button onClick={() => void removePhoto()} className="hand text-[19px] text-[var(--ink-muted)]">
+                remove
+              </button>
+            </div>
+          ) : (
+            <Button variant="secondary" className="mt-2 w-full" onClick={() => fileRef.current?.click()}>
+              Attach the slip
+            </Button>
+          )}
+        </SketchCard>
+      )}
 
       <p className="annot -mt-1 text-center text-[var(--success)]">✓ saved as you type</p>
 
@@ -310,6 +316,7 @@ export function InBodyForm({ today }: { today: string }) {
 // ── Detail ────────────────────────────────────────────────────────────────
 
 export function InBodyDetail({ id }: { id: number }) {
+  const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
   const data = useLiveQuery(async () => {
     const reading = await db.inbody.get(id);
     const photo = reading?.photoId ? await db.photos.get(reading.photoId) : undefined;
@@ -367,7 +374,7 @@ export function InBodyDetail({ id }: { id: number }) {
         );
       })}
 
-      {data.photo && (
+      {moduleFlags.photos && data.photo && (
         <SketchCard className="px-4 py-4">
           <span className="hand text-[22px]">printout</span>
           <img

@@ -1,6 +1,10 @@
 import { db, type Workout, type WorkoutExercise } from './schema';
 import { DEFAULT_RAMP, type RampConfig } from '../domain/ramp';
-import type { CommitmentOverrides } from '../domain/commitments';
+import {
+  DEFAULT_MODULE_FLAGS,
+  type CommitmentOverrides,
+  type ModuleFlags,
+} from '../domain/commitments';
 import {
   advanceAfterSession,
   overrideToSession,
@@ -93,6 +97,23 @@ export function updateCommitmentOverride(
   });
   overrideQueue = run.catch(() => undefined);
   return run;
+}
+
+// ── Module flags ──────────────────────────────────────────────────────────
+
+/**
+ * Work, craft, life, photos, insight and the weekly letter — all off by
+ * default. Flipping one back on is instant and touches no other state: the
+ * module's own data, ramp week, and overrides were never deleted, only
+ * excluded while off.
+ */
+export async function getModuleFlags(): Promise<ModuleFlags> {
+  const stored = await get<Partial<ModuleFlags>>('moduleFlags');
+  return { ...DEFAULT_MODULE_FLAGS, ...stored };
+}
+
+export function saveModuleFlags(flags: ModuleFlags): Promise<void> {
+  return set('moduleFlags', flags);
 }
 
 // ── Training ──────────────────────────────────────────────────────────────
@@ -483,11 +504,33 @@ export function saveRateCache(c: RateCache): Promise<void> {
 // ── Targets ───────────────────────────────────────────────────────────────
 
 export async function getCalorieTarget(): Promise<number> {
-  return (await get<number>('calorieTarget')) ?? 2300;
+  return (await get<number>('calorieTarget')) ?? 2200;
 }
 
 export function saveCalorieTarget(kcal: number): Promise<void> {
   return set('calorieTarget', kcal);
+}
+
+/** A macro target as a range — protein and fat are bands, not single numbers. */
+export interface MacroRange {
+  min: number;
+  max: number;
+}
+
+export async function getProteinTarget(): Promise<MacroRange> {
+  return (await get<MacroRange>('proteinTarget')) ?? { min: 190, max: 210 };
+}
+
+export function saveProteinTarget(range: MacroRange): Promise<void> {
+  return set('proteinTarget', range);
+}
+
+export async function getFatTarget(): Promise<MacroRange> {
+  return (await get<MacroRange>('fatTarget')) ?? { min: 60, max: 70 };
+}
+
+export function saveFatTarget(range: MacroRange): Promise<void> {
+  return set('fatTarget', range);
 }
 
 /** Daily goals in minutes for the hour-based commitments. */

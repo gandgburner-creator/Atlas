@@ -2,8 +2,11 @@ import { db } from '../db/schema';
 import {
   getCalorieTarget,
   getCraftGoalMin,
+  getFatTarget,
   getFocusGoalMin,
   getLeanMassKg,
+  getModuleFlags,
+  getProteinTarget,
   getTrainingState,
   getWeightPlan,
 } from '../db/config';
@@ -38,11 +41,14 @@ export async function buildAnalysisMarkdown(
 
   const [
     kcalTarget,
+    proteinTarget,
+    fatTarget,
     focusGoalMin,
     craftGoalMin,
     weightPlan,
     leanMassKg,
     training,
+    moduleFlags,
     sleepLogs,
     weightLogs,
     foodLogs,
@@ -51,11 +57,14 @@ export async function buildAnalysisMarkdown(
     inbody,
   ] = await Promise.all([
     getCalorieTarget(),
+    getProteinTarget(),
+    getFatTarget(),
     getFocusGoalMin(),
     getCraftGoalMin(),
     getWeightPlan(),
     getLeanMassKg(),
     getTrainingState(),
+    getModuleFlags(),
     db.sleepLogs.toArray(),
     db.weightLogs.toArray(),
     db.foodLogs.toArray(),
@@ -75,12 +84,22 @@ export async function buildAnalysisMarkdown(
   // ── Current stats & targets ──────────────────────────────────────────
   lines.push('## Current stats & targets', '');
   lines.push(`- Weight target: ${weightPlan.targetKg} kg by ${formatDayLabel(weightPlan.targetDate)}`);
-  lines.push(`- Calorie target: ${kcalTarget} kcal/day`);
-  lines.push(`- Focus goal: ${formatHours(focusGoalMin)}/day · Craft goal: ${formatHours(craftGoalMin)}/day`);
+  lines.push(
+    `- Food targets: ${kcalTarget} kcal/day · protein ${proteinTarget.min}-${proteinTarget.max}g · fat ${fatTarget.min}-${fatTarget.max}g`,
+  );
+  if (moduleFlags.work || moduleFlags.craft) {
+    const parts = [
+      moduleFlags.work ? `focus ${formatHours(focusGoalMin)}/day` : null,
+      moduleFlags.craft ? `craft ${formatHours(craftGoalMin)}/day` : null,
+    ].filter(Boolean);
+    lines.push(`- Goals: ${parts.join(' · ')}`);
+  }
   lines.push(
     `- Training split: ${training.split.join(', ')} (${training.mode} mode)${training.pause ? ' — paused' : ` — next up: ${nextSession}`}`,
   );
-  lines.push(`- Lean mass (from InBody): ${leanMassKg.toFixed(1)} kg`);
+  if (moduleFlags.insight) {
+    lines.push(`- Lean mass (from InBody): ${leanMassKg.toFixed(1)} kg`);
+  }
   lines.push('');
 
   // ── Training ──────────────────────────────────────────────────────────

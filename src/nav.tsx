@@ -16,7 +16,7 @@ import {
  * drive.
  */
 
-export type Tab = 'today' | 'body' | 'work' | 'craft' | 'life' | 'progress';
+export type Tab = 'today' | 'body' | 'food' | 'work' | 'craft' | 'life' | 'progress';
 
 export type Route =
   | { name: 'sleep' }
@@ -27,7 +27,9 @@ export type Route =
   | { name: 'inbody-detail'; id: number }
   | { name: 'projection' }
   | { name: 'settings' }
-  | { name: 'export' };
+  | { name: 'export' }
+  | { name: 'food-editor'; id?: number }
+  | { name: 'plate-editor'; id?: number };
 
 interface Nav {
   tab: Tab;
