@@ -26,7 +26,8 @@ export type Route =
   | { name: 'inbody-form' }
   | { name: 'inbody-detail'; id: number }
   | { name: 'projection' }
-  | { name: 'settings' };
+  | { name: 'settings' }
+  | { name: 'export' };
 
 interface Nav {
   tab: Tab;

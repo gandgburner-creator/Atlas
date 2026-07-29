@@ -55,7 +55,8 @@ export async function summariseDay(date: ISODate): Promise<DaySummary> {
   const minutes = (area: 'work' | 'craft') =>
     sessions
       .filter((s) => (s.area ?? 'work') === area && s.completed)
-      .reduce((sum, s) => sum + (s.end - s.start) / 60_000, 0);
+      // completed is only ever set true alongside `end` — see SessionTimer.
+      .reduce((sum, s) => sum + (s.end! - s.start) / 60_000, 0);
 
   const focusMinToday = Math.round(minutes('work'));
   const craftMinToday = Math.round(minutes('craft'));

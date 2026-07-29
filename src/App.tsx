@@ -12,6 +12,7 @@ import { todayISO } from './domain/time';
 import { NavProvider, useNav, type Tab } from './nav';
 import { BodyScreen } from './screens/Body';
 import { CraftScreen } from './screens/Craft';
+import { ExportScreen } from './screens/Export';
 import { Home } from './screens/Home';
 import { InBodyDetail, InBodyForm } from './screens/InBody';
 import { LifeScreen } from './screens/Life';
@@ -101,6 +102,8 @@ function Shell({
             <InBodyDetail id={pushed.id} />
           ) : pushed.name === 'projection' ? (
             <Projection today={today} />
+          ) : pushed.name === 'export' ? (
+            <ExportScreen today={today} />
           ) : (
             <Settings
               ramp={ramp}

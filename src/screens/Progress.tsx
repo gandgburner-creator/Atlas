@@ -12,7 +12,7 @@ import {
   weekNumberFor,
 } from '../domain/ramp';
 import { daysLogged, sevenDayAverageWake } from '../domain/stats';
-import { addDays, formatDayLabel, fromISODate, toISODate } from '../domain/time';
+import { addDays, formatDayLabel, fromISODate, weekStartOf } from '../domain/time';
 import { formatHours } from '../domain/today';
 import { latestRollingAvg, rollingAverageSeries } from '../domain/weight';
 import { SleepChart } from './SleepChart';
@@ -41,14 +41,6 @@ function Stat({
       {sub && <span className="caption">{sub}</span>}
     </div>
   );
-}
-
-/** Monday of the week containing `date`. */
-function weekStartOf(date: string): string {
-  const d = fromISODate(date);
-  const shift = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - shift);
-  return toISODate(d);
 }
 
 export function Progress({ ramp, today }: Props) {
@@ -82,8 +74,9 @@ export function Progress({ ramp, today }: Props) {
   const weightAvg = other ? latestRollingAvg(other.weights) : null;
   const focusMin = (area: 'work' | 'craft') =>
     (other?.sessions ?? [])
+      // completed is only ever set once a session ends, so it implies `end` is set too.
       .filter((s) => (s.area ?? 'work') === area && s.completed)
-      .reduce((sum, s) => sum + (s.end - s.start) / 60000, 0);
+      .reduce((sum, s) => sum + (s.end! - s.start) / 60000, 0);
 
   return (
     <div className="flex flex-col gap-6">

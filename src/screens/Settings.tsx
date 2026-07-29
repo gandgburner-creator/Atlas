@@ -4,6 +4,7 @@ import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
 import { TimeField } from '../components/TimeField';
+import { useNav } from '../nav';
 import {
   getCalorieTarget,
   getCommitmentOverrides,
@@ -43,6 +44,7 @@ interface Props {
  * the app never needs editing to change the plan.
  */
 export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props) {
+  const nav = useNav();
   const data = useLiveQuery(async () => {
     const [overrides, training, kcal, focusMin, craftMin, plan, lean] =
       await Promise.all([
@@ -78,6 +80,17 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
         lean={data.lean}
       />
       <RampEditor ramp={ramp} onRampChange={onRampChange} />
+
+      <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
+        <span className="hand text-[26px]">backup & export</span>
+        <p className="caption mt-0.5">
+          Full JSON backup, restore, and a plain-markdown summary to paste
+          into a chat.
+        </p>
+        <Button variant="secondary" className="mt-3 w-full" onClick={() => nav.push({ name: 'export' })}>
+          Open export
+        </Button>
+      </SketchCard>
 
       <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
         <span className="hand text-[26px]">the intro</span>

@@ -1,37 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from './Button';
 import { TimerRing } from './Ring';
 import { SketchBorder, SketchCard } from './Sketch';
 import { db } from '../db/schema';
 
 /**
- * A count-up session timer for focus and craft hours. The running session
- * lives in localStorage as a start timestamp, so locking the phone or
- * backgrounding the PWA loses nothing — elapsed time recomputes from the
- * clock whenever the app wakes.
+ * A count-up session timer for focus and craft hours. "Start" writes the
+ * session to Dexie immediately — start time, intent, tag, area — with no
+ * `end` yet; that absence of `end` is what marks it as still running, so
+ * locking the phone or backgrounding the PWA loses nothing, and reopening
+ * the app resumes straight into the same running session, no prompt.
  *
  * Ending a session asks two things, straight off the sheet: satisfaction
  * 1–5 ("how did it feel? flat → strong") and whether the intent was
- * completed. Abandoning instead saves nothing and says nothing.
+ * completed — both are written onto the same row when it ends. Abandoning
+ * deletes the row outright and says nothing.
  */
-
-interface Running {
-  start: number;
-  intent: string;
-  tag: string;
-  area: 'work' | 'craft';
-}
-
-const KEY = 'atlas.sessionTimer';
-
-function load(): Running | null {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Running) : null;
-  } catch {
-    return null;
-  }
-}
 
 export function SessionTimer({
   area,
@@ -42,7 +27,14 @@ export function SessionTimer({
   color: string;
   tags: string[];
 }) {
-  const [running, setRunning] = useState<Running | null>(load);
+  // Third arg is the value shown only until the very first query resolves —
+  // `null` here, distinct from `undefined` (query resolved, confirmed no
+  // session running), so the idle "Start" card never flashes wrong.
+  const running = useLiveQuery(
+    () => db.focusSessions.filter((s) => s.end === undefined).first(),
+    [],
+    null,
+  );
   const [now, setNow] = useState(Date.now());
   const [intent, setIntent] = useState('');
   const [tag, setTag] = useState(tags[0] ?? '');
@@ -61,43 +53,41 @@ export function SessionTimer({
     };
   }, [running]);
 
-  const start = useCallback(() => {
-    const r: Running = { start: Date.now(), intent: intent.trim(), tag, area };
-    localStorage.setItem(KEY, JSON.stringify(r));
-    setRunning(r);
-  }, [intent, tag, area]);
+  async function start() {
+    await db.focusSessions.add({
+      start: Date.now(),
+      intent: intent.trim(),
+      tag,
+      area,
+    });
+  }
 
   async function finish() {
-    if (!running || satisfaction === null || completed === null) return;
-    await db.focusSessions.add({
-      start: running.start,
+    if (!running?.id || satisfaction === null || completed === null) return;
+    await db.focusSessions.update(running.id, {
       end: Date.now(),
-      intent: running.intent,
-      tag: running.tag,
       satisfaction,
       completed,
-      area: running.area,
     });
-    localStorage.removeItem(KEY);
-    setRunning(null);
     setEnding(false);
     setSatisfaction(null);
     setCompleted(null);
     setIntent('');
   }
 
-  function abandon() {
-    localStorage.removeItem(KEY);
-    setRunning(null);
+  async function abandon() {
+    if (running?.id) await db.focusSessions.delete(running.id);
     setEnding(false);
   }
 
+  if (running === null) return null;
+
   // A session started on the other screen renders there, not here.
-  if (running && running.area !== area) {
+  if (running && (running.area ?? 'work') !== area) {
     return (
       <SketchCard filter="rough2" className="px-5 py-4">
         <p className="caption">
-          a {running.area} session is running — finish it from the {running.area} screen
+          a {running.area ?? 'work'} session is running — finish it from the {running.area ?? 'work'} screen
         </p>
       </SketchCard>
     );
@@ -215,6 +205,7 @@ export function SessionTimer({
         </span>
         <span className="caption">{running.tag}</span>
       </TimerRing>
+      <p className="annot text-[var(--success)]">✓ running — already saved</p>
       <Button onClick={() => setEnding(true)} className="w-full">
         End session
       </Button>

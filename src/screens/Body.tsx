@@ -239,7 +239,15 @@ function DeltaTag({ delta }: { delta: number }) {
 function InBodyCard({ today }: { today: string }) {
   const nav = useNav();
   const readings = useLiveQuery(
-    () => db.inbody.orderBy('date').reverse().limit(5).toArray(),
+    () =>
+      db.inbody
+        .orderBy('date')
+        .reverse()
+        // A draft still being filled in isn't a reading yet — it has no
+        // numbers to show until it's saved.
+        .filter((r) => r.status !== 'in_progress')
+        .limit(5)
+        .toArray(),
     [today],
   );
 
@@ -263,7 +271,7 @@ function InBodyCard({ today }: { today: string }) {
               className="flex items-baseline justify-between border-b-[1.5px] border-dashed border-[var(--rule)] pb-1.5 text-left last:border-0"
             >
               <span className="tnum text-[15px] font-semibold">
-                {r.bodyFatPercent.toFixed(1)}% · {r.skeletalMuscleMassKg.toFixed(1)} kg SMM
+                {r.bodyFatPercent?.toFixed(1)}% · {r.skeletalMuscleMassKg?.toFixed(1)} kg SMM
               </span>
               <span className="tnum caption">{formatDayLabel(r.date)}</span>
             </button>

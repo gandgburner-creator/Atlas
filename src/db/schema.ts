@@ -79,18 +79,30 @@ export interface Workout {
   /** e.g. 'push' | 'pull' | 'legs' — defined by config.splitDefinition. */
   sessionType: string;
   exercises: WorkoutExercise[];
+  /**
+   * Every set is written to this row the moment it's logged, so the row
+   * exists from the instant the session starts. 'in_progress' means it's
+   * still open (mid-session, or left open from a previous day); 'complete'
+   * means "finish session" was tapped. Absent on old rows = complete — they
+   * were always saved whole under the pre-autosave model.
+   */
+  status?: 'in_progress' | 'complete';
 }
 
 export interface FocusSession {
   id?: number;
   /** Epoch millis — a session is an instant-anchored interval, not a day. */
   start: number;
-  end: number;
+  /** Absent while the session is still running — that, not `completed`, is
+   * what marks a row as still open (see startFocusSession/endFocusSession). */
+  end?: number;
   intent: string;
   tag: string;
-  /** 1–5. */
-  satisfaction: number;
-  completed: boolean;
+  /** 1–5, how the session felt. Set only when it ends. */
+  satisfaction?: number;
+  /** Whether the INTENT was accomplished — asked and set only when the
+   * session ends; meaningless (and absent) while one is still running. */
+  completed?: boolean;
   /** Which section the hours count toward. Absent on old rows = 'work'. */
   area?: 'work' | 'craft';
 }
@@ -111,18 +123,23 @@ export interface Photo {
 }
 
 /**
- * An InBody scan. Core six fields are required to save; everything else is
- * optional and hidden behind "more measurements" in the form. `photoId`
- * points at the printout photo in the photos table.
+ * An InBody scan. The core five fields are required to mark the reading
+ * complete; everything else is optional and hidden behind "more
+ * measurements" in the form. The row is written as a draft as soon as the
+ * first field is filled in, so all fields are optional at the storage
+ * layer — validation of the core set happens at save time, in the form.
+ * `photoId` points at the printout photo in the photos table.
  */
 export interface InBodyReading {
   id?: number;
   date: ISODate;
-  weightKg: number;
-  skeletalMuscleMassKg: number;
-  bodyFatMassKg: number;
-  bodyFatPercent: number;
-  fatFreeMassKg: number;
+  /** Absent while the reading is a draft in progress. */
+  status?: 'in_progress' | 'complete';
+  weightKg?: number;
+  skeletalMuscleMassKg?: number;
+  bodyFatMassKg?: number;
+  bodyFatPercent?: number;
+  fatFreeMassKg?: number;
   // Segmental lean mass, kg
   leanRightArm?: number;
   leanLeftArm?: number;

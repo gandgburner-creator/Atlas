@@ -266,33 +266,69 @@ function saveLastFinish(f: LastFinish | null): Promise<void> {
 }
 
 /**
- * Finish a session: save its exercises (creating the workout row, or
- * updating it if this session was already logged today — e.g. after an
- * undo brought the user back to keep editing) and advance the pointer by
- * exactly one. Reads the CURRENT state fresh, inside the queue, rather than
- * trusting whatever the caller's UI last rendered — a screen that's been
- * open a while must not be able to advance the queue from a stale snapshot.
+ * Start a session: create its workout row immediately, before a single set
+ * is logged, so nothing is ever held only in component state pending a
+ * later save. Callers should check getInProgressWorkout() first and only
+ * start a new one when there isn't one open already.
  */
-export function finishTrainingSession(
-  today: string,
-  sessionType: string,
-  exercises: WorkoutExercise[],
-): Promise<LastFinish> {
+export function startTrainingSession(today: string, sessionType: string): Promise<number> {
   return queueTraining(async () => {
+    return (await db.workouts.add({
+      date: today,
+      sessionType,
+      exercises: [],
+      status: 'in_progress',
+    })) as number;
+  });
+}
+
+/**
+ * Today's session left open — reopening the app resumes straight into this,
+ * no prompt. Scoped to today so an in_progress session abandoned on an
+ * EARLIER day (surfaced instead on Home, with its own finish/discard
+ * choice) never blocks today's session from starting fresh.
+ */
+export function getTodaysInProgressWorkout(today: string): Promise<Workout | undefined> {
+  return db.workouts.where({ date: today }).filter((w) => w.status === 'in_progress').first();
+}
+
+/**
+ * An in_progress session left open on a day before today — surfaced on Home
+ * with a finish/discard choice, since silently resuming into it would be
+ * surprising this many days later. There is at most one at a time, since a
+ * new session never starts while an earlier in_progress row is still open
+ * for a PAST day; only today's own row is created alongside it.
+ */
+export function getStaleInProgressWorkout(today: string): Promise<Workout | undefined> {
+  return db.workouts.filter((w) => w.status === 'in_progress' && w.date !== today).first();
+}
+
+/**
+ * Finish a session: every set was already written to the workout row the
+ * moment it was logged (see updateWorkout), so finishing only flips the
+ * row's status to complete and advances the pointer by exactly one. Reads
+ * the CURRENT state fresh, inside the queue, rather than trusting whatever
+ * the caller's UI last rendered — a screen that's been open a while must
+ * not be able to advance the queue from a stale snapshot.
+ */
+export function finishTrainingSession(workoutId: number, today: string): Promise<LastFinish> {
+  return queueTraining(async () => {
+    const workout = await db.workouts.get(workoutId);
+    if (!workout) throw new Error(`finishTrainingSession: no workout ${workoutId}`);
+
     const fresh = await getTrainingState();
     const passed = passRestDays(fresh, today);
-
-    const existing = await db.workouts
-      .where({ date: today, sessionType })
-      .first();
-    const workoutId = existing
-      ? (await db.workouts.update(existing.id as number, { exercises }), existing.id as number)
-      : ((await db.workouts.add({ date: today, sessionType, exercises })) as number);
+    await db.workouts.update(workoutId, { status: 'complete' });
 
     const next = advanceAfterSession(passed, today);
     await saveTrainingState(next);
 
-    const record: LastFinish = { date: today, sessionType, workoutId, priorState: passed };
+    const record: LastFinish = {
+      date: workout.date,
+      sessionType: workout.sessionType,
+      workoutId,
+      priorState: passed,
+    };
     await saveLastFinish(record);
     return record;
   });
@@ -300,16 +336,18 @@ export function finishTrainingSession(
 
 /**
  * Undo the last finish: put the pointer back exactly where it was — from
- * the stored snapshot, not a recomputed guess — and clear the record, since
- * once undone there's nothing left to undo. The workout row is left alone;
- * re-opening that session finds it and edits it in place rather than
- * duplicating it.
+ * the stored snapshot, not a recomputed guess — flip the workout back to
+ * in_progress, and clear the record, since once undone there's nothing left
+ * to undo. Flipping the status is what lets the ordinary "resume the
+ * in-progress session" path pick it straight back up, with nothing
+ * special-cased for the just-undone case.
  */
 export function undoLastFinish(): Promise<void> {
   return queueTraining(async () => {
     const record = await getLastFinish();
     if (!record) return;
     await saveTrainingState(record.priorState);
+    await db.workouts.update(record.workoutId, { status: 'in_progress' });
     await saveLastFinish(null);
   });
 }
@@ -343,12 +381,6 @@ export function overrideNextSession(sessionType: string, today: string): Promise
   });
 }
 
-/** The workout already logged today for this session type, if any — used to
- * re-open (rather than duplicate) a session, including right after undo. */
-export function getWorkoutFor(date: string, sessionType: string): Promise<Workout | undefined> {
-  return db.workouts.where({ date, sessionType }).first();
-}
-
 /** Delete a past session outright. Routed through the same queue as every
  * other training write so it can't land mid-finish and clobber an upsert. */
 export function deleteWorkout(id: number): Promise<void> {
@@ -361,7 +393,9 @@ export function deleteWorkout(id: number): Promise<void> {
   });
 }
 
-/** Update a past session's logged sets from the history editor. */
+/** Write a session's logged sets — called after every single set while a
+ * session is in progress (the autosave), and from the history editor for a
+ * past one. */
 export function updateWorkout(id: number, exercises: WorkoutExercise[]): Promise<void> {
   return queueTraining(async () => {
     await db.workouts.update(id, { exercises });
@@ -471,4 +505,23 @@ export async function getCraftGoalMin(): Promise<number> {
 
 export function saveCraftGoalMin(min: number): Promise<void> {
   return set('craftGoalMin', min);
+}
+
+// ── Export reminder ──────────────────────────────────────────────────────
+
+/** Weekly nudge to back up or paste an analysis export, Sundays. Dismissing
+ * records the Monday of the week it was dismissed in, so it never nags
+ * twice for the same week — it re-arms itself the following Sunday. */
+export interface ExportReminderState {
+  enabled: boolean;
+  dismissedWeek?: string; // ISODate — Monday of the week last dismissed
+}
+
+export async function getExportReminder(): Promise<ExportReminderState> {
+  const stored = await get<Partial<ExportReminderState>>('exportReminder');
+  return { enabled: stored?.enabled ?? true, dismissedWeek: stored?.dismissedWeek };
+}
+
+export function saveExportReminder(s: ExportReminderState): Promise<void> {
+  return set('exportReminder', s);
 }

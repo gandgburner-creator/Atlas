@@ -55,6 +55,14 @@ export function nowClock(): ClockTime {
   return toClock(d.getHours() * 60 + d.getMinutes());
 }
 
+/** Monday of the week containing `date`. */
+export function weekStartOf(date: ISODate): ISODate {
+  const d = fromISODate(date);
+  const shift = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - shift);
+  return toISODate(d);
+}
+
 /** 'Sunday' — safe to set in Caveat, because it holds no digits. */
 export function formatWeekday(iso: ISODate): string {
   return fromISODate(iso).toLocaleDateString(undefined, { weekday: 'long' });
