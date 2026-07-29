@@ -24,8 +24,8 @@ interface Slide {
   art: ReactNode;
 }
 
-function FourSections() {
-  const icons: IconName[] = ['body', 'work', 'craft', 'life'];
+function ThreeSections() {
+  const icons: IconName[] = ['lift', 'sleep', 'food'];
   return (
     <div className="flex items-end justify-center gap-5 py-2">
       {SECTIONS.map((s, i) => (
@@ -42,10 +42,9 @@ function TodayPreview() {
   return (
     <div className="flex flex-col gap-3 py-1">
       <div className="flex justify-center gap-3">
-        <Ring section="body" fraction={0.66} size={56} />
-        <Ring section="work" fraction={null} size={56} />
-        <Ring section="craft" fraction={null} size={56} />
-        <Ring section="life" fraction={null} size={56} />
+        <Ring section="train" fraction={0.66} size={56} />
+        <Ring section="rest" fraction={null} size={56} />
+        <Ring section="fuel" fraction={null} size={56} />
       </div>
       <div className="flex flex-col gap-2">
         <SketchCard stroke="var(--success)" className="px-3 py-2">
@@ -99,9 +98,8 @@ function GapArt() {
 function RampArt() {
   const rows = [
     { label: 'sleep · training · weight', when: 'now' },
-    { label: 'nutrition', when: 'week 3' },
-    { label: 'rest · calls', when: 'week 5' },
-    { label: 'focus · craft', when: 'later' },
+    { label: 'food', when: 'week 3' },
+    { label: 'work · craft · life', when: 'off — settings' },
   ];
   return (
     <div className="flex flex-col gap-1.5 py-1">
@@ -128,8 +126,8 @@ function RampArt() {
 const SLIDES: Slide[] = [
   {
     title: 'Atlas',
-    body: 'A notebook for four parts of your life. Log a little each day — that is the whole idea. Everything stays on this phone; nothing is uploaded anywhere.',
-    art: <FourSections />,
+    body: 'A notebook for training, sleep, weight and food. Log a little each day — that is the whole idea. Everything stays on this phone; nothing is uploaded anywhere.',
+    art: <ThreeSections />,
   },
   {
     title: 'one screen',
@@ -143,7 +141,7 @@ const SLIDES: Slide[] = [
   },
   {
     title: 'it starts small',
-    body: 'You do not get everything at once. Sleep, training and weight start now; the rest switches on over the coming weeks so nothing arrives all at the same time. Change any of it later in settings.',
+    body: 'Sleep, training and weight start now; food follows a couple of weeks in. Work, craft and life exist but stay off until you switch them on yourself, in settings.',
     art: <RampArt />,
   },
 ];

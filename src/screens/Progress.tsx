@@ -5,6 +5,7 @@ import { Button } from '../components/Button';
 import { DashedRule, SketchBorder, SketchCard } from '../components/Sketch';
 import { getWeightPlan } from '../db/config';
 import { db } from '../db/schema';
+import type { ModuleFlags } from '../domain/commitments';
 import {
   isRampComplete,
   isWeekRepeated,
@@ -12,7 +13,7 @@ import {
   weekNumberFor,
 } from '../domain/ramp';
 import { daysLogged, sevenDayAverageWake } from '../domain/stats';
-import { addDays, formatDayLabel, fromISODate, toISODate } from '../domain/time';
+import { addDays, formatDayLabel, fromISODate, weekStartOf } from '../domain/time';
 import { formatHours } from '../domain/today';
 import { latestRollingAvg, rollingAverageSeries } from '../domain/weight';
 import { SleepChart } from './SleepChart';
@@ -21,6 +22,7 @@ import { WeightChart } from './WeightChart';
 interface Props {
   ramp: RampConfig;
   today: string;
+  moduleFlags: ModuleFlags;
 }
 
 function Stat({
@@ -43,15 +45,7 @@ function Stat({
   );
 }
 
-/** Monday of the week containing `date`. */
-function weekStartOf(date: string): string {
-  const d = fromISODate(date);
-  const shift = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - shift);
-  return toISODate(d);
-}
-
-export function Progress({ ramp, today }: Props) {
+export function Progress({ ramp, today, moduleFlags }: Props) {
   const logs = useLiveQuery(() => allSleepLogs(), []);
 
   const weekStart = weekStartOf(today);
@@ -82,8 +76,9 @@ export function Progress({ ramp, today }: Props) {
   const weightAvg = other ? latestRollingAvg(other.weights) : null;
   const focusMin = (area: 'work' | 'craft') =>
     (other?.sessions ?? [])
+      // completed is only ever set once a session ends, so it implies `end` is set too.
       .filter((s) => (s.area ?? 'work') === area && s.completed)
-      .reduce((sum, s) => sum + (s.end - s.start) / 60000, 0);
+      .reduce((sum, s) => sum + (s.end! - s.start) / 60000, 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -172,11 +167,20 @@ export function Progress({ ramp, today }: Props) {
           value={String(other?.workouts.length ?? 0)}
           sub="lifted this week"
         />
-        <Stat
-          label="focus"
-          value={formatHours(Math.round(focusMin('work')))}
-          sub={`craft ${formatHours(Math.round(focusMin('craft')))} this week`}
-        />
+        {moduleFlags.work && (
+          <Stat
+            label="focus"
+            value={formatHours(Math.round(focusMin('work')))}
+            sub="this week"
+          />
+        )}
+        {moduleFlags.craft && (
+          <Stat
+            label="craft"
+            value={formatHours(Math.round(focusMin('craft')))}
+            sub="this week"
+          />
+        )}
       </section>
 
       {total === 0 && (
@@ -190,7 +194,9 @@ export function Progress({ ramp, today }: Props) {
       )}
 
       {/* ── The letter — handwriting for heading and signature only ────── */}
-      <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
+      {moduleFlags.letter && (
+        <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
+      )}
     </div>
   );
 }

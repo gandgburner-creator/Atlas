@@ -1,19 +1,27 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader } from '../components/Chrome';
 import { Icon } from '../components/Icon';
 import { DashedRule, SketchCard } from '../components/Sketch';
-import { saveLeanMassKg } from '../db/config';
+import { getModuleFlags, saveLeanMassKg } from '../db/config';
 import { db, type InBodyReading } from '../db/schema';
+import { DEFAULT_MODULE_FLAGS } from '../domain/commitments';
 import { formatDayLabel, todayISO } from '../domain/time';
 import { useNav } from '../nav';
 
 /**
- * InBody entry. Only the core six are required; everything else folds away
+ * InBody entry. Only the core five are required; everything else folds away
  * behind "more measurements" so a fast entry stays fast. Saving updates the
  * shared leanMassKg (fat-free mass) that the composition figure and the
  * projection both read.
+ *
+ * A draft row is created in Dexie the moment the form opens, before a
+ * single field is filled in, and every field edit writes straight to that
+ * row — nothing here is ever held only in component state. Reopening the
+ * app with an unfinished reading resumes straight into the same draft, no
+ * prompt. "Save reading" only validates the core five and flips the row's
+ * status to complete; the numbers themselves were already saved as typed.
  */
 
 type FieldSpec = { key: keyof InBodyReading; label: string; unit?: string };
@@ -50,13 +58,87 @@ export function InBodyForm({ today }: { today: string }) {
   const nav = useNav();
   const [values, setValues] = useState<Record<string, string>>({ date: today });
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<Blob | null>(null);
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
+
+  // The draft row this form is writing to. Created immediately on open, or
+  // resumed from whatever was left in progress — either way, by the time
+  // the user can type anything, there is already a row for it to land in.
+  const draftIdRef = useRef<number | null>(null);
+  const draftPromiseRef = useRef<Promise<number> | null>(null);
+  const [loadedDraftId, setLoadedDraftId] = useState<number | null>(null);
+
+  // Third arg is the value used only until the very first query resolves —
+  // `null` here, distinct from `undefined` (resolved, confirmed no draft
+  // left open), so a fresh draft isn't created a beat too early, racing a
+  // real one about to be resumed.
+  const existingDraft = useLiveQuery(
+    () => db.inbody.filter((r) => r.status === 'in_progress').first(),
+    [],
+    null,
+  );
+
+  if (existingDraft && loadedDraftId !== existingDraft.id) {
+    draftIdRef.current = existingDraft.id ?? null;
+    const loaded: Record<string, string> = { date: existingDraft.date };
+    for (const [k, val] of Object.entries(existingDraft)) {
+      if (['id', 'date', 'status', 'photoId'].includes(k)) continue;
+      if (val === undefined || val === null) continue;
+      loaded[k] = String(val);
+    }
+    setValues(loaded);
+    setLoadedDraftId(existingDraft.id ?? null);
+  }
+
+  useEffect(() => {
+    if (!existingDraft?.photoId) return;
+    let cancelled = false;
+    void db.photos.get(existingDraft.photoId).then((p) => {
+      if (!cancelled && p) setPhotoPreview(p.blob);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [existingDraft?.photoId]);
+
+  // No draft to resume, confirmed (not just "still loading") — start a
+  // fresh one immediately, before a single field is filled in.
+  useEffect(() => {
+    if (existingDraft === null || existingDraft) return;
+    if (draftIdRef.current || draftPromiseRef.current) return;
+    void ensureDraftId();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingDraft]);
+
+  if (existingDraft === null) return <PushHeader title="inbody reading" />;
+
+  async function ensureDraftId(): Promise<number> {
+    if (draftIdRef.current) return draftIdRef.current;
+    if (!draftPromiseRef.current) {
+      draftPromiseRef.current = db.inbody.add({
+        date: today,
+        status: 'in_progress',
+      }) as Promise<number>;
+    }
+    const id = await draftPromiseRef.current;
+    draftIdRef.current = id;
+    return id;
+  }
+
+  async function patchField(key: string, raw: string) {
+    const id = await ensureDraftId();
+    const patch: Partial<InBodyReading> =
+      key === 'date' ? { date: raw || todayISO() } : { [key]: parseNum(raw) ?? undefined };
+    await db.inbody.update(id, patch);
+  }
 
   const v = (k: string) => values[k] ?? '';
-  const setV = (k: string) => (val: string) =>
+  const setV = (k: string) => (val: string) => {
     setValues((s) => ({ ...s, [k]: val }));
+    void patchField(k, val);
+  };
 
   const core = {
     weightKg: parseNum(v('weightKg')),
@@ -67,33 +149,43 @@ export function InBodyForm({ today }: { today: string }) {
   };
   const coreComplete = Object.values(core).every((x) => x !== null);
 
+  async function attachPhoto(file: File) {
+    const id = await ensureDraftId();
+    const photoId = (await db.photos.add({
+      date: v('date') || todayISO(),
+      type: 'inbody',
+      blob: file,
+    })) as number;
+    await db.inbody.update(id, { photoId });
+    setPhotoPreview(file);
+  }
+
+  async function removePhoto() {
+    const id = await ensureDraftId();
+    const current = await db.inbody.get(id);
+    await db.inbody.update(id, { photoId: undefined });
+    if (current?.photoId) await db.photos.delete(current.photoId);
+    setPhotoPreview(null);
+  }
+
   async function save() {
     if (!coreComplete) return;
     setSaving(true);
     try {
-      let photoId: number | undefined;
-      if (photo) {
-        photoId = (await db.photos.add({
-          date: v('date') || todayISO(),
-          type: 'inbody',
-          blob: photo,
-        })) as number;
-      }
-      const reading: InBodyReading = {
+      const id = await ensureDraftId();
+      // Every field was already written to the draft as it was typed; this
+      // final write only guarantees the very last keystroke landed before
+      // the row flips to complete, and sets the shared lean mass the figure
+      // and projection read from.
+      await db.inbody.update(id, {
         date: v('date') || todayISO(),
         weightKg: core.weightKg!,
         skeletalMuscleMassKg: core.skeletalMuscleMassKg!,
         bodyFatMassKg: core.bodyFatMassKg!,
         bodyFatPercent: core.bodyFatPercent!,
         fatFreeMassKg: core.fatFreeMassKg!,
-        photoId,
-      };
-      for (const spec of [...SEG_LEAN, ...SEG_FAT, ...METABOLIC]) {
-        const n = parseNum(v(spec.key as string));
-        if (n !== null) (reading as unknown as Record<string, unknown>)[spec.key as string] = n;
-      }
-      await db.inbody.add(reading);
-      // Fat-free mass IS the lean mass the figure and projection use.
+        status: 'complete',
+      });
       await saveLeanMassKg(core.fatFreeMassKg!);
       nav.pop();
     } finally {
@@ -169,44 +261,53 @@ export function InBodyForm({ today }: { today: string }) {
       <Collapsible id="fat" title="segmental fat" fields={SEG_FAT} />
       <Collapsible id="meta" title="more measurements" fields={METABOLIC} />
 
-      {/* Printout photo */}
-      <SketchCard filter="rough2" className="px-4 py-4">
-        <div className="flex items-center justify-between">
-          <span className="hand text-[22px]">printout photo</span>
-          <Icon name="photo" size={22} stroke="var(--ink-muted)" />
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
-        />
-        {photo ? (
-          <div className="mt-2 flex items-center gap-3">
-            <img
-              src={URL.createObjectURL(photo)}
-              alt="InBody printout"
-              className="h-24 w-16 object-cover"
-              style={{ border: '2px solid var(--rule)' }}
-            />
-            <button onClick={() => setPhoto(null)} className="hand text-[19px] text-[var(--ink-muted)]">
-              remove
-            </button>
+      {/* Printout photo — behind its own flag, independent of the rest of
+          InBody, since a photo is the one thing here that leaves the phone
+          if a backup is ever shared. */}
+      {moduleFlags.photos && (
+        <SketchCard filter="rough2" className="px-4 py-4">
+          <div className="flex items-center justify-between">
+            <span className="hand text-[22px]">printout photo</span>
+            <Icon name="photo" size={22} stroke="var(--ink-muted)" />
           </div>
-        ) : (
-          <Button variant="secondary" className="mt-2 w-full" onClick={() => fileRef.current?.click()}>
-            Attach the slip
-          </Button>
-        )}
-      </SketchCard>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void attachPhoto(file);
+            }}
+          />
+          {photoPreview ? (
+            <div className="mt-2 flex items-center gap-3">
+              <img
+                src={URL.createObjectURL(photoPreview)}
+                alt="InBody printout"
+                className="h-24 w-16 object-cover"
+                style={{ border: '2px solid var(--rule)' }}
+              />
+              <button onClick={() => void removePhoto()} className="hand text-[19px] text-[var(--ink-muted)]">
+                remove
+              </button>
+            </div>
+          ) : (
+            <Button variant="secondary" className="mt-2 w-full" onClick={() => fileRef.current?.click()}>
+              Attach the slip
+            </Button>
+          )}
+        </SketchCard>
+      )}
+
+      <p className="annot -mt-1 text-center text-[var(--success)]">✓ saved as you type</p>
 
       <Button onClick={save} disabled={!coreComplete || saving}>
         {saving ? 'Saving…' : 'Save reading'}
       </Button>
       {!coreComplete && (
-        <p className="caption text-center">the six core numbers are all it needs</p>
+        <p className="caption text-center">the five core numbers are all it needs</p>
       )}
     </div>
   );
@@ -215,6 +316,7 @@ export function InBodyForm({ today }: { today: string }) {
 // ── Detail ────────────────────────────────────────────────────────────────
 
 export function InBodyDetail({ id }: { id: number }) {
+  const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
   const data = useLiveQuery(async () => {
     const reading = await db.inbody.get(id);
     const photo = reading?.photoId ? await db.photos.get(reading.photoId) : undefined;
@@ -225,11 +327,11 @@ export function InBodyDetail({ id }: { id: number }) {
   const r = data.reading;
 
   const rows: [string, string][] = [
-    ['weight', `${r.weightKg.toFixed(1)} kg`],
-    ['skeletal muscle', `${r.skeletalMuscleMassKg.toFixed(1)} kg`],
-    ['body fat mass', `${r.bodyFatMassKg.toFixed(1)} kg`],
-    ['body fat', `${r.bodyFatPercent.toFixed(1)} %`],
-    ['fat-free mass', `${r.fatFreeMassKg.toFixed(1)} kg`],
+    ['weight', `${r.weightKg?.toFixed(1) ?? '—'} kg`],
+    ['skeletal muscle', `${r.skeletalMuscleMassKg?.toFixed(1) ?? '—'} kg`],
+    ['body fat mass', `${r.bodyFatMassKg?.toFixed(1) ?? '—'} kg`],
+    ['body fat', `${r.bodyFatPercent?.toFixed(1) ?? '—'} %`],
+    ['fat-free mass', `${r.fatFreeMassKg?.toFixed(1) ?? '—'} kg`],
   ];
   const extra: [string, FieldSpec[]][] = [
     ['segmental lean', SEG_LEAN],
@@ -272,7 +374,7 @@ export function InBodyDetail({ id }: { id: number }) {
         );
       })}
 
-      {data.photo && (
+      {moduleFlags.photos && data.photo && (
         <SketchCard className="px-4 py-4">
           <span className="hand text-[22px]">printout</span>
           <img

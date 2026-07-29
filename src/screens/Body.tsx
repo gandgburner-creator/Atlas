@@ -14,19 +14,20 @@ import {
   saveStageDates,
 } from '../db/config';
 import { db } from '../db/schema';
+import type { ModuleFlags } from '../domain/commitments';
 import { bfPercent, clampBf, updateStageDates } from '../domain/composition';
 import { formatDayLabel, todayISO } from '../domain/time';
 import { passRestDays, sessionFor } from '../domain/training';
 import { latestRollingAvg, rollingAverageSeries } from '../domain/weight';
 import { useNav } from '../nav';
-import { NutritionCard } from './Nutrition';
 import { WeightChart } from './WeightChart';
 
 interface Props {
   today: string;
+  moduleFlags: ModuleFlags;
 }
 
-export function BodyScreen({ today }: Props) {
+export function BodyScreen({ today, moduleFlags }: Props) {
   const nav = useNav();
   const [kgInput, setKgInput] = useState('');
   const [savingKg, setSavingKg] = useState(false);
@@ -94,58 +95,62 @@ export function BodyScreen({ today }: Props) {
 
   return (
     <div className="flex flex-col gap-6">
-      <TabHeader title="Body" annot="figure · weight · training" />
+      <TabHeader title="Body" annot="weight · training" />
 
-      {/* ── Composition figure — current state only, tap for projection ── */}
-      {shownBf !== null ? (
-        <button onClick={() => nav.push({ name: 'projection' })} className="text-left">
-          <SketchCard className="px-5 pt-4 pb-5">
-            <div className="flex items-center justify-between">
-              <span className="hand text-[26px]">composition</span>
-              <span className="tnum caption font-semibold">
-                est. {shownBf.toFixed(1)}%
-              </span>
-            </div>
-            <div className="relative mx-auto mt-2 w-[46%]">
-              {pinned && (
-                <Figure
-                  bfPercent={pinned.bfPercent}
-                  ghost
-                  className="absolute inset-0"
-                  alt=""
-                />
-              )}
-              <Figure bfPercent={shownBf} />
-            </div>
-            {pinned && avg !== null && (
-              <p className="tnum caption mt-2 text-center">
-                pinned {pinned.bfPercent.toFixed(0)}% ·{' '}
-                {Math.max(0, avg - pinned.weightKg).toFixed(1)} kg to go
+      {/* ── Composition figure / stage timeline — behind the insight flag,
+          since these are projections derived from weight, not weight itself. */}
+      {moduleFlags.insight && (
+        <>
+          {shownBf !== null ? (
+            <button onClick={() => nav.push({ name: 'projection' })} className="text-left">
+              <SketchCard className="px-5 pt-4 pb-5">
+                <div className="flex items-center justify-between">
+                  <span className="hand text-[26px]">composition</span>
+                  <span className="tnum caption font-semibold">
+                    est. {shownBf.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="relative mx-auto mt-2 w-[46%]">
+                  {pinned && (
+                    <Figure
+                      bfPercent={pinned.bfPercent}
+                      ghost
+                      className="absolute inset-0"
+                      alt=""
+                    />
+                  )}
+                  <Figure bfPercent={shownBf} />
+                </div>
+                {pinned && avg !== null && (
+                  <p className="tnum caption mt-2 text-center">
+                    pinned {pinned.bfPercent.toFixed(0)}% ·{' '}
+                    {Math.max(0, avg - pinned.weightKg).toFixed(1)} kg to go
+                  </p>
+                )}
+                <p className="caption mt-1 text-center">tap to project</p>
+              </SketchCard>
+            </button>
+          ) : (
+            <SketchCard className="px-5 py-6">
+              <p className="hand text-[24px] text-[var(--ink-muted)]">composition</p>
+              <p className="caption mt-1">
+                The figure draws from the 7-day average. Log a weight below and it
+                appears.
               </p>
-            )}
-            <p className="caption mt-1 text-center">tap to project</p>
-          </SketchCard>
-        </button>
-      ) : (
-        <SketchCard className="px-5 py-6">
-          <p className="hand text-[24px] text-[var(--ink-muted)]">composition</p>
-          <p className="caption mt-1">
-            The figure draws from the 7-day average. Log a weight below and it
-            appears.
-          </p>
-        </SketchCard>
-      )}
+            </SketchCard>
+          )}
 
-      {/* Stage timeline — the milestones this feature exists for. */}
-      {reachedStages.length > 0 && (
-        <div className="flex flex-col gap-1 px-1">
-          {reachedStages.map(({ stage, date }) => (
-            <div key={stage} className="flex items-baseline justify-between">
-              <span className="tnum text-[15px] font-semibold">{stage}%</span>
-              <span className="tnum caption">{formatDayLabel(date)}</span>
+          {reachedStages.length > 0 && (
+            <div className="flex flex-col gap-1 px-1">
+              {reachedStages.map(({ stage, date }) => (
+                <div key={stage} className="flex items-baseline justify-between">
+                  <span className="tnum text-[15px] font-semibold">{stage}%</span>
+                  <span className="tnum caption">{formatDayLabel(date)}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {/* ── Weight ─────────────────────────────────────────────────────── */}
@@ -217,11 +222,8 @@ export function BodyScreen({ today }: Props) {
         </SketchCard>
       </button>
 
-      {/* ── Nutrition ──────────────────────────────────────────────────── */}
-      <NutritionCard today={today} />
-
       {/* ── InBody ─────────────────────────────────────────────────────── */}
-      <InBodyCard today={today} />
+      {moduleFlags.insight && <InBodyCard today={today} />}
     </div>
   );
 }
@@ -239,7 +241,15 @@ function DeltaTag({ delta }: { delta: number }) {
 function InBodyCard({ today }: { today: string }) {
   const nav = useNav();
   const readings = useLiveQuery(
-    () => db.inbody.orderBy('date').reverse().limit(5).toArray(),
+    () =>
+      db.inbody
+        .orderBy('date')
+        .reverse()
+        // A draft still being filled in isn't a reading yet — it has no
+        // numbers to show until it's saved.
+        .filter((r) => r.status !== 'in_progress')
+        .limit(5)
+        .toArray(),
     [today],
   );
 
@@ -263,7 +273,7 @@ function InBodyCard({ today }: { today: string }) {
               className="flex items-baseline justify-between border-b-[1.5px] border-dashed border-[var(--rule)] pb-1.5 text-left last:border-0"
             >
               <span className="tnum text-[15px] font-semibold">
-                {r.bodyFatPercent.toFixed(1)}% · {r.skeletalMuscleMassKg.toFixed(1)} kg SMM
+                {r.bodyFatPercent?.toFixed(1)}% · {r.skeletalMuscleMassKg?.toFixed(1)} kg SMM
               </span>
               <span className="tnum caption">{formatDayLabel(r.date)}</span>
             </button>

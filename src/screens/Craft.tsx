@@ -30,8 +30,9 @@ export function CraftScreen({ today }: { today: string }) {
     };
   }, [today]);
 
+  // completed is only ever set once a session ends, so it implies `end` is set too.
   const done = data?.sessions.filter((s) => s.completed) ?? [];
-  const minutes = done.reduce((sum, s) => sum + (s.end - s.start) / 60000, 0);
+  const minutes = done.reduce((sum, s) => sum + (s.end! - s.start) / 60000, 0);
 
   async function addItem() {
     if (!newTitle.trim()) return;

@@ -51,16 +51,68 @@ export interface WeightLog {
   kg: number;
 }
 
+/** Grams for `per100g`, a count for `unit` and `scoop` — the food's
+ * unitType decides which control the log screen shows. */
+export type FoodUnitType = 'per100g' | 'unit' | 'scoop';
+
+/**
+ * A food in the database, seeded or custom. The four macro fields are per
+ * the unit: per 100g, per one unit, or per one scoop. `kcal` is the LABEL
+ * value, authoritative — never recomputed from the macros, since the two
+ * don't always agree and the label is what's wanted.
+ */
+export interface FoodItem {
+  id?: number;
+  name: string;
+  unitType: FoodUnitType;
+  kcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  /** Pinned to the top of every list. */
+  favourite?: boolean;
+  /** Calories hide in small volume differences here — flagged in the log
+   * screen as "weigh, don't guess". */
+  weighDontGuess?: boolean;
+  /** A photo of the nutrition label, for checking a self-entered value later. */
+  photoId?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One food and how much of it, inside a plate. */
+export interface PlateItem {
+  foodId: number;
+  /** Same unit as logging that food directly: grams, or a count. */
+  quantity: number;
+}
+
+/** A saved combination of foods, logged as a single one-tap entry. */
+export interface Plate {
+  id?: number;
+  name: string;
+  items: PlateItem[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface FoodLog {
   id?: number;
   date: ISODate;
-  /** Reference into a food library added in a later slice. */
-  itemId: string;
+  /** Reference into foodItems. */
+  foodId: number;
+  /** Grams for `per100g` foods, a count for `unit`/`scoop`. */
   quantity: number;
+  /**
+   * Snapshotted at log time from the food's values — so correcting a food's
+   * label later never rewrites what was actually eaten on a past day.
+   */
   kcal: number;
   protein: number;
   fat: number;
   carbs: number;
+  /** Set when this entry was logged as part of a plate, not standalone. */
+  plateId?: number;
 }
 
 export interface WorkoutSet {
@@ -79,18 +131,30 @@ export interface Workout {
   /** e.g. 'push' | 'pull' | 'legs' — defined by config.splitDefinition. */
   sessionType: string;
   exercises: WorkoutExercise[];
+  /**
+   * Every set is written to this row the moment it's logged, so the row
+   * exists from the instant the session starts. 'in_progress' means it's
+   * still open (mid-session, or left open from a previous day); 'complete'
+   * means "finish session" was tapped. Absent on old rows = complete — they
+   * were always saved whole under the pre-autosave model.
+   */
+  status?: 'in_progress' | 'complete';
 }
 
 export interface FocusSession {
   id?: number;
   /** Epoch millis — a session is an instant-anchored interval, not a day. */
   start: number;
-  end: number;
+  /** Absent while the session is still running — that, not `completed`, is
+   * what marks a row as still open (see startFocusSession/endFocusSession). */
+  end?: number;
   intent: string;
   tag: string;
-  /** 1–5. */
-  satisfaction: number;
-  completed: boolean;
+  /** 1–5, how the session felt. Set only when it ends. */
+  satisfaction?: number;
+  /** Whether the INTENT was accomplished — asked and set only when the
+   * session ends; meaningless (and absent) while one is still running. */
+  completed?: boolean;
   /** Which section the hours count toward. Absent on old rows = 'work'. */
   area?: 'work' | 'craft';
 }
@@ -111,18 +175,23 @@ export interface Photo {
 }
 
 /**
- * An InBody scan. Core six fields are required to save; everything else is
- * optional and hidden behind "more measurements" in the form. `photoId`
- * points at the printout photo in the photos table.
+ * An InBody scan. The core five fields are required to mark the reading
+ * complete; everything else is optional and hidden behind "more
+ * measurements" in the form. The row is written as a draft as soon as the
+ * first field is filled in, so all fields are optional at the storage
+ * layer — validation of the core set happens at save time, in the form.
+ * `photoId` points at the printout photo in the photos table.
  */
 export interface InBodyReading {
   id?: number;
   date: ISODate;
-  weightKg: number;
-  skeletalMuscleMassKg: number;
-  bodyFatMassKg: number;
-  bodyFatPercent: number;
-  fatFreeMassKg: number;
+  /** Absent while the reading is a draft in progress. */
+  status?: 'in_progress' | 'complete';
+  weightKg?: number;
+  skeletalMuscleMassKg?: number;
+  bodyFatMassKg?: number;
+  bodyFatPercent?: number;
+  fatFreeMassKg?: number;
   // Segmental lean mass, kg
   leanRightArm?: number;
   leanLeftArm?: number;
@@ -192,6 +261,8 @@ export class AtlasDB extends Dexie {
   craftItems!: EntityTable<CraftItem, 'id'>;
   letters!: EntityTable<Letter, 'weekStart'>;
   config!: EntityTable<ConfigEntry, 'key'>;
+  foodItems!: EntityTable<FoodItem, 'id'>;
+  plates!: EntityTable<Plate, 'id'>;
 
   constructor() {
     super('atlas');
@@ -215,6 +286,16 @@ export class AtlasDB extends Dexie {
     });
     this.version(3).stores({
       letters: 'weekStart',
+    });
+    // v4: food rebuilt around a real food database. foodLogs moves from a
+    // free-text itemId to a numeric foodId — old rows keep their data (the
+    // snapshotted kcal/protein/fat/carbs still sum correctly into past
+    // totals) but no longer resolve to a name, which is fine: the old
+    // widget only ever logged loose "quick" entries.
+    this.version(4).stores({
+      foodLogs: '++id, date, foodId, plateId',
+      foodItems: '++id, name, favourite',
+      plates: '++id, name',
     });
   }
 }

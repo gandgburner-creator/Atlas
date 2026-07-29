@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { PushHeader } from '../components/Chrome';
@@ -6,12 +6,14 @@ import { SketchBorder, SketchCard } from '../components/Sketch';
 import {
   finishTrainingSession,
   getExercisePlans,
+  getTodaysInProgressWorkout,
   getTrainingState,
-  getWorkoutFor,
   overrideNextSession,
   saveExercisePlans,
   saveTrainingState,
   skipRestDay,
+  startTrainingSession,
+  updateWorkout,
   LOCKED_SESSION,
   type ExerciseDef,
 } from '../db/config';
@@ -32,7 +34,7 @@ interface Props {
 
 type Draft = Record<string, (WorkoutSet | null)[]>;
 
-function draftFromWorkout(exercises: WorkoutExercise[]): Draft {
+function draftFromExercises(exercises: WorkoutExercise[]): Draft {
   const d: Draft = {};
   for (const ex of exercises) d[ex.name] = ex.sets.length ? ex.sets : [null];
   return d;
@@ -40,10 +42,14 @@ function draftFromWorkout(exercises: WorkoutExercise[]): Draft {
 
 export function TrainingLog({ today }: Props) {
   const nav = useNav();
-  const [saving, setSaving] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [pauseOpen, setPauseOpen] = useState(false);
   const [changeOpen, setChangeOpen] = useState(false);
   const restTimer = useRestTimer();
+  // Bridges the gap between "user tapped log set" and "the row this session
+  // writes to actually exists in Dexie" — only ever needed for the first set
+  // of a fresh session, since the mount effect below normally wins the race.
+  const startPromiseRef = useRef<Promise<number> | null>(null);
 
   const data = useLiveQuery(async () => {
     const [rawState, plans, workouts] = await Promise.all([
@@ -53,43 +59,86 @@ export function TrainingLog({ today }: Props) {
     ]);
     const state = passRestDays(rawState, today);
     const session = sessionFor(state, today);
-    const existing = await getWorkoutFor(today, session);
-    return { state, plans, workouts, session, existing };
+    // Scoped to today: a session left in_progress from an earlier day is
+    // Home's problem (finish/discard banner), never silently resumed here —
+    // that would block today's session from starting fresh.
+    const inProgress = await getTodaysInProgressWorkout(today);
+    return { state, plans, workouts, session, inProgress };
   }, [today]);
 
   const [draft, setDraft] = useState<Draft>({});
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
 
-  // Load today's already-saved session (if any — including right after an
-  // undo) into the draft exactly once per session shown, not on every
-  // re-render, so mid-edit typing isn't clobbered by the live query.
-  if (data && loadedFor !== data.session) {
-    setDraft(data.existing ? draftFromWorkout(data.existing.exercises) : {});
-    setLoadedFor(data.session);
+  // Load the in-progress row's already-logged sets into the draft exactly
+  // once per workout shown — keyed on the row's id, not the session name —
+  // so mid-tap editing isn't clobbered by the live query re-running.
+  if (data?.inProgress && loadedFor !== data.inProgress.id) {
+    setDraft(draftFromExercises(data.inProgress.exercises));
+    setLoadedFor(data.inProgress.id ?? null);
   }
 
+  // Starting a session creates its Dexie row the instant it's opened — the
+  // record must exist before a single set is logged, never held only in
+  // this component's state. Guarded per session type so a pending creation
+  // isn't re-fired on every render, and re-armed once the pointer moves on.
+  const startedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const { state, session, inProgress } = data;
+    if (state.pause || session === 'rest' || inProgress) return;
+    if (startedForRef.current === session) return;
+    startedForRef.current = session;
+    void startTrainingSession(today, session);
+  }, [data, today]);
+
   if (!data) return null;
-  const { state, plans, workouts, session, existing } = data;
+  const { state, plans, workouts, session, inProgress } = data;
   const paused = Boolean(state.pause);
-  const exercises = plans[session] ?? [];
-  const last = lastTimeFor(workouts, session, existing ? today : undefined);
-  const locked = session === LOCKED_SESSION;
+  // The session actually being trained is whichever row is already open
+  // today, if any — its own type, not necessarily today's freshly computed
+  // slot, so resuming after a reload always lands back on the right one.
+  const activeSession = inProgress?.sessionType ?? session;
+  const exercises = plans[activeSession] ?? [];
+  const last = lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
+  const locked = activeSession === LOCKED_SESSION;
+
+  async function ensureWorkoutId(): Promise<number> {
+    if (inProgress?.id) return inProgress.id;
+    if (!startPromiseRef.current) {
+      startPromiseRef.current = startTrainingSession(today, session);
+    }
+    return startPromiseRef.current;
+  }
+
+  async function persist(nextDraft: Draft) {
+    const id = await ensureWorkoutId();
+    const done: WorkoutExercise[] = Object.entries(nextDraft)
+      .map(([name, sets]) => ({
+        name,
+        sets: sets.filter((s): s is WorkoutSet => s !== null),
+      }))
+      .filter((e) => e.sets.length > 0);
+    await updateWorkout(id, done);
+  }
+
+  function updateDraft(name: string, sets: (WorkoutSet | null)[]) {
+    setDraft((d) => {
+      const next = { ...d, [name]: sets };
+      void persist(next);
+      return next;
+    });
+  }
 
   async function finish() {
-    setSaving(true);
+    setFinishing(true);
     try {
-      const done: WorkoutExercise[] = Object.entries(draft)
-        .map(([name, sets]) => ({
-          name,
-          sets: sets.filter((s): s is WorkoutSet => s !== null),
-        }))
-        .filter((e) => e.sets.length > 0);
       // Zero sets logged is still a valid, complete session — the button is
       // never disabled for it, and finishing it still advances the queue.
-      await finishTrainingSession(today, session, done);
+      const id = await ensureWorkoutId();
+      await finishTrainingSession(id, today);
       nav.pop();
     } finally {
-      setSaving(false);
+      setFinishing(false);
     }
   }
 
@@ -107,7 +156,7 @@ export function TrainingLog({ today }: Props) {
   }
 
   function setExercises(next: ExerciseDef[]) {
-    void saveExercisePlans({ ...plans, [session]: next });
+    void saveExercisePlans({ ...plans, [activeSession]: next });
   }
 
   const slotTypes = [...new Set(state.split)];
@@ -115,7 +164,7 @@ export function TrainingLog({ today }: Props) {
   return (
     <div className={`flex flex-col gap-5 ${restTimer.timer ? 'pb-28' : 'pb-4'}`}>
       <PushHeader
-        title={paused ? 'paused' : session === 'rest' ? 'rest day' : session}
+        title={paused ? 'paused' : activeSession === 'rest' ? 'rest day' : activeSession}
         right={
           <div className="flex items-center gap-1">
             <button
@@ -133,6 +182,10 @@ export function TrainingLog({ today }: Props) {
           </div>
         }
       />
+
+      {!paused && activeSession !== 'rest' && inProgress && (
+        <p className="annot -mt-3 text-[var(--success)]">✓ every set saves as you log it</p>
+      )}
 
       {!paused && (
         <div>
@@ -175,7 +228,7 @@ export function TrainingLog({ today }: Props) {
         </SketchCard>
       )}
 
-      {!paused && session === 'rest' && (
+      {!paused && activeSession === 'rest' && (
         <SketchCard className="px-5 py-5">
           <p className="hand text-[26px]">rest is on the plan</p>
           <p className="caption mt-1">
@@ -192,7 +245,7 @@ export function TrainingLog({ today }: Props) {
         </SketchCard>
       )}
 
-      {!paused && session !== 'rest' && (
+      {!paused && activeSession !== 'rest' && (
         <>
           {exercises.map((def, i) => (
             <ExerciseCard
@@ -200,7 +253,7 @@ export function TrainingLog({ today }: Props) {
               def={def}
               last={last.get(def.name)}
               sets={draft[def.name] ?? [null, null, null, null]}
-              onChange={(sets) => setDraft((d) => ({ ...d, [def.name]: sets }))}
+              onChange={(sets) => updateDraft(def.name, sets)}
               onSetLogged={(d) => restTimer.start(d.name, d.restSec)}
               manage={
                 locked
@@ -212,7 +265,9 @@ export function TrainingLog({ today }: Props) {
                         setExercises(next);
                         setDraft((d) => {
                           const { [def.name]: sets, ...rest } = d;
-                          return sets ? { ...rest, [name]: sets } : d;
+                          const nextDraft = sets ? { ...rest, [name]: sets } : d;
+                          void persist(nextDraft);
+                          return nextDraft;
                         });
                       },
                       onMoveUp: i > 0 ? () => {
@@ -240,8 +295,8 @@ export function TrainingLog({ today }: Props) {
             <AddExercisePanel onAdd={(def) => setExercises([...exercises, def])} />
           )}
 
-          <Button onClick={finish} disabled={saving} className="mt-1">
-            {saving ? 'Saving…' : 'Finish session'}
+          <Button onClick={finish} disabled={finishing} className="mt-1">
+            {finishing ? 'Saving…' : 'Finish session'}
           </Button>
         </>
       )}

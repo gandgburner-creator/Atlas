@@ -1,5 +1,5 @@
 import type { Section } from '../domain/commitments';
-import { Icon } from './Icon';
+import { Icon, type IconName } from './Icon';
 
 /**
  * Status ring, from Asset Library section 02.
@@ -11,10 +11,10 @@ import { Icon } from './Icon';
  */
 
 export const SECTION_COLOR: Record<Section, string> = {
-  body: 'var(--accent)',
-  work: '#2B5F8E',
-  craft: '#4F7A34',
-  life: '#A85F1B',
+  train: 'var(--accent)',
+  rest: '#2B5F8E',
+  fuel: '#4F7A34',
+  other: '#A85F1B',
 };
 
 const R = 26;
@@ -165,6 +165,13 @@ export function MiniRing({ section, fraction }: { section: Section; fraction: nu
   return <Ring section={section} fraction={fraction} size={46} />;
 }
 
+const SECTION_ICON: Record<Section, IconName> = {
+  train: 'lift',
+  rest: 'sleep',
+  fuel: 'food',
+  other: 'board',
+};
+
 export function sectionIcon(section: Section) {
-  return <Icon name={section} />;
+  return <Icon name={SECTION_ICON[section]} />;
 }

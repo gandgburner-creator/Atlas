@@ -1,18 +1,31 @@
+import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { Icon, type IconName } from '../components/Icon';
 import { Ring } from '../components/Ring';
 import { SketchCard } from '../components/Sketch';
-import { getCommitmentOverrides, getLastFinish, undoLastFinish } from '../db/config';
+import {
+  deleteWorkout,
+  finishTrainingSession,
+  getCommitmentOverrides,
+  getExportReminder,
+  getLastFinish,
+  getModuleFlags,
+  getStaleInProgressWorkout,
+  saveExportReminder,
+  undoLastFinish,
+} from '../db/config';
 import {
   resolveCommitments,
   ringStates,
   type CommitmentId,
   type ResolvedCommitment,
+  type Section,
 } from '../domain/commitments';
 import type { RampConfig } from '../domain/ramp';
+import { shouldShowExportReminder } from '../domain/reminder';
 import { formatHours, summariseDay } from '../domain/today';
-import { formatDayLabel, formatWeekday } from '../domain/time';
+import { formatDayLabel, formatWeekday, weekStartOf } from '../domain/time';
 import { useNav, type Tab } from '../nav';
 
 interface Props {
@@ -36,15 +49,26 @@ const ITEM_TAB: Record<CommitmentId, Tab> = {
   wake_time: 'today',
   training_log: 'body',
   weight_log: 'body',
-  nutrition: 'body',
+  nutrition: 'food',
   rest_block: 'life',
   calls: 'life',
   focus_hours: 'work',
   craft_hours: 'craft',
 };
 
+/** Where a tap on a ring lands — train/rest live where they always did;
+ * fuel goes to Food, the more frequent of its two halves. */
+const RING_TAB: Record<Section, Tab> = {
+  train: 'body',
+  rest: 'today',
+  fuel: 'food',
+  other: 'today',
+};
+
 export function Home({ ramp, today }: Props) {
   const nav = useNav();
+  const [discarding, setDiscarding] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   // summariseDay queries every table that feeds done-ness, so the live query
   // re-runs whenever any of them changes.
@@ -52,20 +76,53 @@ export function Home({ ramp, today }: Props) {
     const overrides = (await getCommitmentOverrides()) ?? {};
     const summary = await summariseDay(today);
     const lastFinish = await getLastFinish();
-    return { overrides, summary, lastFinish };
+    // A session left in_progress from an earlier day — never auto-closed,
+    // never silently resumed (that's only for today's own session), just
+    // surfaced here with a choice.
+    const stale = await getStaleInProgressWorkout(today);
+    const exportReminder = await getExportReminder();
+    const moduleFlags = await getModuleFlags();
+    return { overrides, summary, lastFinish, stale, exportReminder, moduleFlags };
   }, [today]);
 
   if (!data) return null;
-  const { overrides, summary, lastFinish } = data;
+  const { overrides, summary, lastFinish, stale, exportReminder, moduleFlags } = data;
   const canUndo = lastFinish?.date === today;
+  const weekStart = weekStartOf(today);
+  const showExportReminder = shouldShowExportReminder(exportReminder, today, weekStart);
+
+  async function dismissExportReminder() {
+    await saveExportReminder({ ...exportReminder, dismissedWeek: weekStart });
+  }
 
   async function undo() {
     await undoLastFinish();
     nav.push({ name: 'training-log' });
   }
 
-  const rings = ringStates(ramp.startDate, today, overrides, summary.doneIds);
-  const commitments = resolveCommitments(ramp.startDate, today, overrides);
+  async function finishStale() {
+    if (!stale?.id) return;
+    setBusy(true);
+    try {
+      await finishTrainingSession(stale.id, today);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardStale() {
+    if (!stale?.id) return;
+    setBusy(true);
+    try {
+      await deleteWorkout(stale.id);
+      setDiscarding(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const rings = ringStates(ramp.startDate, today, overrides, summary.doneIds, moduleFlags);
+  const commitments = resolveCommitments(ramp.startDate, today, overrides, moduleFlags);
   const active = commitments.filter((c) => c.active);
   const upcoming = commitments.filter((c) => c.upcoming);
 
@@ -112,13 +169,13 @@ export function Home({ ramp, today }: Props) {
         </button>
       </header>
 
-      {/* Four rings. Greyed = nothing scheduled, never a failure. */}
+      {/* Three rings: train, rest, fuel. Greyed = nothing scheduled, never a failure. */}
       <SketchCard className="px-3 pt-5 pb-4">
-        <div className="grid grid-cols-4">
+        <div className="grid grid-cols-3">
           {rings.map((r) => (
             <button
               key={r.section}
-              onClick={() => nav.setTab(r.section as Tab)}
+              onClick={() => nav.setTab(RING_TAB[r.section])}
               className="flex flex-col items-center"
             >
               <Ring
@@ -137,6 +194,30 @@ export function Home({ ramp, today }: Props) {
         </div>
       </SketchCard>
 
+      {/* Sunday nudge — dismissible, and never twice for the same week. */}
+      {showExportReminder && (
+        <SketchCard filter="rough2" className="flex items-center gap-3 px-4 py-3">
+          <p className="flex-1 text-[14px] leading-snug">
+            <span className="hand text-[20px]">weekly export</span> — back up
+            or paste an update into a chat.
+          </p>
+          <Button
+            variant="secondary"
+            onClick={() => nav.push({ name: 'export' })}
+            className="shrink-0 px-3 text-[14px]"
+          >
+            Open
+          </Button>
+          <button
+            onClick={dismissExportReminder}
+            aria-label="dismiss weekly export reminder"
+            className="shrink-0 text-[16px] text-[var(--ink-muted)]"
+          >
+            ×
+          </button>
+        </SketchCard>
+      )}
+
       {/* Undo stays available for the rest of the day it was finished on. */}
       {canUndo && (
         <SketchCard filter="rough2" className="flex items-center gap-3 px-4 py-3">
@@ -147,6 +228,37 @@ export function Home({ ramp, today }: Props) {
           <Button variant="secondary" onClick={undo} className="shrink-0 px-3 text-[14px]">
             Undo
           </Button>
+        </SketchCard>
+      )}
+
+      {/* A session left open from an earlier day — never auto-closed, never
+          blocks today's own session, just needs a decision. */}
+      {stale && (
+        <SketchCard filter="rough2" className="px-4 py-3">
+          <p className="text-[14px] leading-snug">
+            <span className="hand text-[20px]">{stale.sessionType}</span> from{' '}
+            {formatDayLabel(stale.date)} is still open.
+          </p>
+          {discarding ? (
+            <div className="mt-2 flex gap-2">
+              <p className="caption flex-1 self-center">Discard it? This can't be undone.</p>
+              <Button variant="secondary" onClick={() => setDiscarding(false)} className="shrink-0 px-3 text-[14px]">
+                Keep it
+              </Button>
+              <Button onClick={discardStale} disabled={busy} className="shrink-0 px-3 text-[14px]">
+                Discard
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-2 flex gap-2">
+              <Button variant="secondary" onClick={() => setDiscarding(true)} disabled={busy} className="flex-1 text-[14px]">
+                Discard
+              </Button>
+              <Button onClick={finishStale} disabled={busy} className="flex-1 text-[14px]">
+                Finish it
+              </Button>
+            </div>
+          )}
         </SketchCard>
       )}
 

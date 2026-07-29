@@ -23,8 +23,12 @@ export function WorkScreen({ today }: { today: string }) {
     };
   }, [today]);
 
+  // completed is only ever set once a session ends, so it implies end/satisfaction are set too.
   const done = data?.sessions.filter((s) => s.completed) ?? [];
-  const minutes = done.reduce((sum, s) => sum + (s.end - s.start) / 60000, 0);
+  const minutes = done.reduce((sum, s) => sum + (s.end! - s.start) / 60000, 0);
+  // The still-running session (if any) shows via SessionTimer above; this
+  // list is the finished log for today.
+  const ended = data?.sessions.filter((s) => s.end !== undefined) ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -47,18 +51,18 @@ export function WorkScreen({ today }: { today: string }) {
           <span className="hand text-[21px] text-[var(--ink-muted)]">felt</span>
           <p className="tnum text-[34px] font-semibold leading-tight tracking-[-0.02em]">
             {done.length
-              ? (done.reduce((s, x) => s + x.satisfaction, 0) / done.length).toFixed(1)
+              ? (done.reduce((s, x) => s + x.satisfaction!, 0) / done.length).toFixed(1)
               : '—'}
           </p>
           <span className="caption">flat 1 → 5 strong</span>
         </SketchCard>
       </div>
 
-      {data && data.sessions.length > 0 && (
+      {ended.length > 0 && (
         <SketchCard className="px-5 py-4">
           <span className="hand text-[24px]">today's sessions</span>
           <div className="mt-2 flex flex-col">
-            {data.sessions.map((s) => (
+            {ended.map((s) => (
               <div
                 key={s.id}
                 className="flex items-baseline justify-between border-b-[1.5px] border-dashed border-[var(--rule)] py-2 last:border-0"
@@ -67,7 +71,7 @@ export function WorkScreen({ today }: { today: string }) {
                   {s.intent || s.tag}
                 </span>
                 <span className="tnum caption ml-3 shrink-0">
-                  {formatHours(Math.round((s.end - s.start) / 60000))} ·{' '}
+                  {formatHours(Math.round((s.end! - s.start) / 60000))} ·{' '}
                   {s.completed ? `felt ${s.satisfaction}` : 'stopped'}
                 </span>
               </div>
@@ -76,7 +80,7 @@ export function WorkScreen({ today }: { today: string }) {
         </SketchCard>
       )}
 
-      {data && data.sessions.length === 0 && (
+      {data && ended.length === 0 && (
         <p className="caption px-1">
           Nothing logged yet today. The first session starts the line.
         </p>

@@ -35,7 +35,8 @@ describe('training state: serialized writes', () => {
 
   it('finishing one session advances the pointer by exactly one position', async () => {
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const record = await config.finishTrainingSession(TODAY, 'back', []);
+    const id = await config.startTrainingSession(TODAY, 'back');
+    const record = await config.finishTrainingSession(id, TODAY);
     const state = await config.getTrainingState();
     expect(state.pointer).toBe(1);
     expect(SPLIT[state.pointer % SPLIT.length]).toBe('shoulders');
@@ -49,10 +50,11 @@ describe('training state: serialized writes', () => {
     // chain now, so no interleaving can move the pointer by more than the
     // one step "Finish" is entitled to.
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await config.startTrainingSession(TODAY, 'back');
 
     await Promise.all([
       config.autoPassRestDays(TODAY),
-      config.finishTrainingSession(TODAY, 'back', []),
+      config.finishTrainingSession(id, TODAY),
       config.autoPassRestDays(TODAY),
     ]);
 
@@ -71,7 +73,8 @@ describe('training state: serialized writes', () => {
       if (passed === 'rest') {
         await config.skipRestDay(TODAY);
       } else {
-        await config.finishTrainingSession(TODAY, passed, []);
+        const id = await config.startTrainingSession(TODAY, passed);
+        await config.finishTrainingSession(id, TODAY);
       }
     }
     // back, shoulders, rest, legs, chest, rest, back, shoulders — one full
@@ -81,18 +84,18 @@ describe('training state: serialized writes', () => {
     ]);
   });
 
-  it('undo restores the exact prior pointer and re-opening finds the same workout row', async () => {
+  it('undo restores the exact prior pointer and re-opens the same in_progress workout row', async () => {
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const record = await config.finishTrainingSession(TODAY, 'back', [
-      { name: 'Pull-ups', sets: [{ reps: 8, weight: 0 }] },
-    ]);
+    const id = await config.startTrainingSession(TODAY, 'back');
+    await config.updateWorkout(id, [{ name: 'Pull-ups', sets: [{ reps: 8, weight: 0 }] }]);
+    const record = await config.finishTrainingSession(id, TODAY);
 
     await config.undoLastFinish();
 
     const state = await config.getTrainingState();
     expect(state.pointer).toBe(0); // back to where it was before finishing
 
-    const reopened = await config.getWorkoutFor(TODAY, 'back');
+    const reopened = await config.getTodaysInProgressWorkout(TODAY);
     expect(reopened?.id).toBe(record.workoutId); // same row, not a duplicate
     expect(reopened?.exercises[0]?.sets).toHaveLength(1);
 
@@ -102,13 +105,14 @@ describe('training state: serialized writes', () => {
 
   it('re-finishing after undo updates the same row instead of creating a second one', async () => {
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const first = await config.finishTrainingSession(TODAY, 'back', [
-      { name: 'Pull-ups', sets: [{ reps: 8, weight: 0 }] },
-    ]);
+    const id = await config.startTrainingSession(TODAY, 'back');
+    await config.updateWorkout(id, [{ name: 'Pull-ups', sets: [{ reps: 8, weight: 0 }] }]);
+    const first = await config.finishTrainingSession(id, TODAY);
     await config.undoLastFinish();
-    const second = await config.finishTrainingSession(TODAY, 'back', [
+    await config.updateWorkout(id, [
       { name: 'Pull-ups', sets: [{ reps: 8, weight: 0 }, { reps: 7, weight: 0 }] },
     ]);
+    const second = await config.finishTrainingSession(id, TODAY);
 
     expect(second.workoutId).toBe(first.workoutId);
     const schema = await import('./schema');
@@ -129,9 +133,20 @@ describe('training state: serialized writes', () => {
 
   it('deleting a workout clears the undo banner only when it was the one just finished', async () => {
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const record = await config.finishTrainingSession(TODAY, 'back', []);
+    const id = await config.startTrainingSession(TODAY, 'back');
+    const record = await config.finishTrainingSession(id, TODAY);
     await config.deleteWorkout(record.workoutId);
     expect(await config.getLastFinish()).toBeUndefined();
+  });
+
+  it('a session left in_progress from an earlier day surfaces as stale, not as today\'s session', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const YESTERDAY = '2026-08-02';
+    const id = await config.startTrainingSession(YESTERDAY, 'back');
+
+    expect(await config.getTodaysInProgressWorkout(TODAY)).toBeUndefined();
+    const stale = await config.getStaleInProgressWorkout(TODAY);
+    expect(stale?.id).toBe(id);
   });
 
   it('legs stays locked even if a save is attempted against it', async () => {
