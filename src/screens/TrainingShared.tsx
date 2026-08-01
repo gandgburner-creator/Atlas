@@ -180,7 +180,7 @@ interface ExerciseCardProps {
   sets: Draft;
   onChange: (sets: Draft) => void;
   onSetLogged?: (def: ExerciseDef) => void;
-  /** Rename / reorder / remove / edit rest — hidden entirely for legs. */
+  /** Rename / reorder / remove / edit rest. */
   manage?: {
     onRename: (name: string) => void;
     onMoveUp?: () => void;
@@ -437,8 +437,8 @@ function SetEditor({
 
 // ── Add exercise ──────────────────────────────────────────────────────────
 
-/** Always visible at the bottom of the list — never gated behind an empty
- * state, per the brief. Hidden for legs by the caller (locked). */
+/** Always visible at the bottom of the list, for every session type — never
+ * gated behind an empty state. */
 export function AddExercisePanel({
   onAdd,
 }: {

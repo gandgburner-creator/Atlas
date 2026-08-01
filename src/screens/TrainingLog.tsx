@@ -14,7 +14,6 @@ import {
   skipRestDay,
   startTrainingSession,
   updateWorkout,
-  LOCKED_SESSION,
   type ExerciseDef,
 } from '../db/config';
 import { db, type WorkoutExercise, type WorkoutSet } from '../db/schema';
@@ -100,7 +99,6 @@ export function TrainingLog({ today }: Props) {
   const activeSession = inProgress?.sessionType ?? session;
   const exercises = plans[activeSession] ?? [];
   const last = lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
-  const locked = activeSession === LOCKED_SESSION;
 
   async function ensureWorkoutId(): Promise<number> {
     if (inProgress?.id) return inProgress.id;
@@ -252,48 +250,42 @@ export function TrainingLog({ today }: Props) {
               key={def.name}
               def={def}
               last={last.get(def.name)}
-              sets={draft[def.name] ?? [null, null, null, null]}
+              sets={draft[def.name] ?? Array(def.sets ?? 4).fill(null)}
               onChange={(sets) => updateDraft(def.name, sets)}
               onSetLogged={(d) => restTimer.start(d.name, d.restSec)}
-              manage={
-                locked
-                  ? undefined
-                  : {
-                      onRename: (name) => {
-                        const next = [...exercises];
-                        next[i] = { ...def, name };
-                        setExercises(next);
-                        setDraft((d) => {
-                          const { [def.name]: sets, ...rest } = d;
-                          const nextDraft = sets ? { ...rest, [name]: sets } : d;
-                          void persist(nextDraft);
-                          return nextDraft;
-                        });
-                      },
-                      onMoveUp: i > 0 ? () => {
-                        const next = [...exercises];
-                        [next[i - 1], next[i]] = [next[i] as ExerciseDef, next[i - 1] as ExerciseDef];
-                        setExercises(next);
-                      } : undefined,
-                      onMoveDown: i < exercises.length - 1 ? () => {
-                        const next = [...exercises];
-                        [next[i], next[i + 1]] = [next[i + 1] as ExerciseDef, next[i] as ExerciseDef];
-                        setExercises(next);
-                      } : undefined,
-                      onRemove: () => setExercises(exercises.filter((_, j) => j !== i)),
-                      onEditRest: (restSec) => {
-                        const next = [...exercises];
-                        next[i] = { ...def, restSec };
-                        setExercises(next);
-                      },
-                    }
-              }
+              manage={{
+                onRename: (name) => {
+                  const next = [...exercises];
+                  next[i] = { ...def, name };
+                  setExercises(next);
+                  setDraft((d) => {
+                    const { [def.name]: sets, ...rest } = d;
+                    const nextDraft = sets ? { ...rest, [name]: sets } : d;
+                    void persist(nextDraft);
+                    return nextDraft;
+                  });
+                },
+                onMoveUp: i > 0 ? () => {
+                  const next = [...exercises];
+                  [next[i - 1], next[i]] = [next[i] as ExerciseDef, next[i - 1] as ExerciseDef];
+                  setExercises(next);
+                } : undefined,
+                onMoveDown: i < exercises.length - 1 ? () => {
+                  const next = [...exercises];
+                  [next[i], next[i + 1]] = [next[i + 1] as ExerciseDef, next[i] as ExerciseDef];
+                  setExercises(next);
+                } : undefined,
+                onRemove: () => setExercises(exercises.filter((_, j) => j !== i)),
+                onEditRest: (restSec) => {
+                  const next = [...exercises];
+                  next[i] = { ...def, restSec };
+                  setExercises(next);
+                },
+              }}
             />
           ))}
 
-          {!locked && (
-            <AddExercisePanel onAdd={(def) => setExercises([...exercises, def])} />
-          )}
+          <AddExercisePanel onAdd={(def) => setExercises([...exercises, def])} />
 
           <Button onClick={finish} disabled={finishing} className="mt-1">
             {finishing ? 'Saving…' : 'Finish session'}

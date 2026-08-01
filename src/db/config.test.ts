@@ -149,12 +149,36 @@ describe('training state: serialized writes', () => {
     expect(stale?.id).toBe(id);
   });
 
-  it('legs stays locked even if a save is attempted against it', async () => {
+  it('legs is editable just like every other session type', async () => {
+    const rebuilt = [{ name: 'Leg extension', repRangeTop: 12, equipment: 'machine' as const, restSec: 90 }];
     await config.saveExercisePlans({
       ...config.DEFAULT_EXERCISE_PLANS,
-      legs: [{ name: 'Leg extension', repRangeTop: 12, equipment: 'machine', restSec: 90 }],
+      legs: rebuilt,
     });
     const plans = await config.getExercisePlans();
+    expect(plans.legs).toEqual(rebuilt);
+  });
+
+  it('migrates a pre-unlock stored plan (legs still the old locked squat/RDL pair) to the new list, once', async () => {
+    // Simulate a plan saved back when the lock still enforced the old pair —
+    // this could only ever have been saved as exactly this, never anything
+    // else, since the lock rewrote legs on every save.
+    const oldStyle = {
+      ...config.DEFAULT_EXERCISE_PLANS,
+      legs: [
+        { name: 'Back squat', repRangeTop: 8, repRangeBottom: 6, equipment: 'barbell' as const, restSec: 210 },
+        { name: 'Romanian deadlift', repRangeTop: 10, repRangeBottom: 8, equipment: 'barbell' as const, restSec: 180 },
+      ],
+    };
+    const schema = await import('./schema');
+    await schema.db.config.put({ key: 'exercisePlans', value: oldStyle });
+
+    const plans = await config.getExercisePlans();
     expect(plans.legs).toEqual(config.DEFAULT_EXERCISE_PLANS.legs);
+
+    // The migration persists, so a later edit sticks instead of reverting.
+    const customLegs = [{ name: 'Leg press', repRangeTop: 12, equipment: 'machine' as const, restSec: 150 }];
+    await config.saveExercisePlans({ ...plans, legs: customLegs });
+    expect((await config.getExercisePlans()).legs).toEqual(customLegs);
   });
 });
