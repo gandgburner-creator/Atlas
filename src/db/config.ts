@@ -173,16 +173,14 @@ export interface ExerciseDef {
   /** Bodyweight exercises normally progress by adding a rep. A few (pull-ups)
    * progress by adding load once the rep ceiling is cleared instead. */
   progressToWeighted?: boolean;
+  /** How many blank sets a fresh session starts with. Defaults to 4. */
+  sets?: number;
 }
 
 export type ExercisePlans = Record<string, ExerciseDef[]>;
 
-/**
- * The full four-day program. Legs is squats and RDL ONLY — knee injury
- * history, squats stop just below 90°. That list is locked: enforced again
- * in saveExercisePlans below, not just in the UI, so no future screen can
- * accidentally add a leg exercise.
- */
+/** The full four-day program. Every session type — legs included — is
+ * equally editable: add, rename, reorder, remove. */
 export const DEFAULT_EXERCISE_PLANS: ExercisePlans = {
   back: [
     { name: 'Pull-ups', repRangeTop: 8, equipment: 'bodyweight', seedReps: 8, restSec: 180, progressToWeighted: true },
@@ -198,10 +196,13 @@ export const DEFAULT_EXERCISE_PLANS: ExercisePlans = {
     { name: 'Cable lateral raise', repRangeTop: 15, repRangeBottom: 12, equipment: 'machine', restSec: 60 },
     { name: 'Shrugs', repRangeTop: 12, equipment: 'barbell', restSec: 90 },
   ],
-  // Locked. Do not add leg exercises — see saveExercisePlans.
   legs: [
-    { name: 'Back squat', repRangeTop: 8, repRangeBottom: 6, equipment: 'barbell', restSec: 210 },
-    { name: 'Romanian deadlift', repRangeTop: 10, repRangeBottom: 8, equipment: 'barbell', restSec: 180 },
+    { name: 'Leg press', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 180, sets: 4 },
+    { name: 'Romanian deadlift', repRangeTop: 10, repRangeBottom: 8, equipment: 'barbell', restSec: 180, sets: 4 },
+    { name: 'Leg extension', repRangeTop: 15, repRangeBottom: 12, equipment: 'machine', restSec: 90, sets: 3 },
+    { name: 'Seated leg curl', repRangeTop: 12, repRangeBottom: 10, equipment: 'machine', restSec: 90, sets: 3 },
+    { name: 'Hip abduction', repRangeTop: 15, equipment: 'machine', restSec: 60, sets: 3 },
+    { name: 'Hip adduction', repRangeTop: 15, equipment: 'machine', restSec: 60, sets: 3 },
   ],
   chest: [
     { name: 'Barbell bench press', repRangeTop: 8, equipment: 'barbell', seedWeight: 80, seedReps: 8, restSec: 180 },
@@ -212,23 +213,30 @@ export const DEFAULT_EXERCISE_PLANS: ExercisePlans = {
   ],
 };
 
-/** The one session type whose exercise list can never be edited. */
-export const LOCKED_SESSION = 'legs';
-
-// Non-null: it's a key defined directly in DEFAULT_EXERCISE_PLANS above.
-const LOCKED_EXERCISES = DEFAULT_EXERCISE_PLANS[LOCKED_SESSION]!;
+// Every stored `exercisePlans` written before legs was unlocked has this
+// EXACT pair for legs — the lock enforced it on every save, so there was
+// never any other possible value. That makes it safe to detect and swap
+// for the new list, exactly once: after the swap, legs no longer matches
+// this signature, so a user's own future edits are never touched again.
+const OLD_LOCKED_LEGS: ExerciseDef[] = [
+  { name: 'Back squat', repRangeTop: 8, repRangeBottom: 6, equipment: 'barbell', restSec: 210 },
+  { name: 'Romanian deadlift', repRangeTop: 10, repRangeBottom: 8, equipment: 'barbell', restSec: 180 },
+];
 
 export async function getExercisePlans(): Promise<ExercisePlans> {
   const stored = await get<ExercisePlans>('exercisePlans');
   if (!stored) return DEFAULT_EXERCISE_PLANS;
-  // Legs stays exactly the seed list regardless of what's stored — a guard
-  // against the locked list ever having been changed by an older build.
-  return { ...stored, [LOCKED_SESSION]: LOCKED_EXERCISES };
+  if (JSON.stringify(stored.legs) === JSON.stringify(OLD_LOCKED_LEGS)) {
+    // Non-null: 'legs' is a key defined directly in the literal above.
+    const migrated = { ...stored, legs: DEFAULT_EXERCISE_PLANS.legs! };
+    await set('exercisePlans', migrated);
+    return migrated;
+  }
+  return stored;
 }
 
 export function saveExercisePlans(p: ExercisePlans): Promise<void> {
-  // Same guard on the way in: legs cannot be edited, full stop.
-  return set('exercisePlans', { ...p, [LOCKED_SESSION]: LOCKED_EXERCISES });
+  return set('exercisePlans', p);
 }
 
 // ── Training: atomic, serialized mutations ─────────────────────────────────
