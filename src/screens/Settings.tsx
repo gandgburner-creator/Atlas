@@ -1,16 +1,25 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { ALARM_MS, playAlarm, TONES, unlockAudio, vibrate } from '../alarm';
+import {
+  notifyPermission,
+  requestNotifyPermission,
+  type NotifyPermission,
+} from '../notify';
 import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader, YesNo } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
 import { TimeField } from '../components/TimeField';
 import { useNav } from '../nav';
 import {
+  getAlarmSettings,
   getCalorieTarget,
   getCommitmentOverrides,
   getCraftGoalMin,
+  saveAlarmSettings,
   updateCommitmentOverride,
   getFatTarget,
+  type AlarmSettings,
   getFocusGoalMin,
   getLeanMassKg,
   getModuleFlags,
@@ -56,7 +65,7 @@ interface Props {
 export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props) {
   const nav = useNav();
   const data = useLiveQuery(async () => {
-    const [overrides, training, kcal, proteinTarget, fatTarget, focusMin, craftMin, plan, lean, moduleFlags] =
+    const [overrides, training, kcal, proteinTarget, fatTarget, focusMin, craftMin, plan, lean, moduleFlags, alarm] =
       await Promise.all([
         getCommitmentOverrides(),
         getTrainingState(),
@@ -68,6 +77,7 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
         getWeightPlan(),
         getLeanMassKg(),
         getModuleFlags(),
+        getAlarmSettings(),
       ]);
     return {
       overrides: overrides ?? {},
@@ -80,6 +90,7 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
       plan,
       lean,
       moduleFlags,
+      alarm,
     };
   }, []);
 
@@ -101,6 +112,7 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
       />
       <NextSessionEditor training={data.training} today={today} />
       <SplitEditor training={data.training} />
+      <AlarmEditor settings={data.alarm} />
       <TargetsEditor
         kcal={data.kcal}
         proteinTarget={data.proteinTarget}
@@ -135,6 +147,134 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
         </Button>
       </SketchCard>
     </div>
+  );
+}
+
+// ── Rest alarm ────────────────────────────────────────────────────────────
+
+/**
+ * Every channel is separately switchable because each one fails somewhere
+ * different, and which one matters depends on whether you train with
+ * headphones in, with the phone in a pocket, or with the screen locked.
+ */
+function AlarmEditor({ settings }: { settings: AlarmSettings }) {
+  const [permission, setPermission] = useState<NotifyPermission>(notifyPermission);
+  const [testing, setTesting] = useState(false);
+
+  function update(patch: Partial<AlarmSettings>) {
+    void saveAlarmSettings({ ...settings, ...patch });
+  }
+
+  async function enableNotifications() {
+    unlockAudio();
+    const next = await requestNotifyPermission();
+    setPermission(next);
+    update({ notifications: next === 'granted', askedToNotify: true });
+  }
+
+  function test() {
+    // The tap that started the test is also what authorises audio on iOS,
+    // which makes this button a genuine check that the alarm will sound
+    // later — not just a preview of the tone.
+    unlockAudio();
+    setTesting(true);
+    if (settings.sound) playAlarm(settings.tone);
+    if (settings.vibration) vibrate();
+    window.setTimeout(() => setTesting(false), ALARM_MS);
+  }
+
+  return (
+    <SketchCard className="px-4 pt-4 pb-4">
+      <span className="hand text-[26px]">rest alarm</span>
+      <p className="caption mt-0.5">
+        All three fire together when rest is up, since each one gets lost
+        somewhere: sound to headphones, buzz to iOS, both to a locked screen.
+      </p>
+
+      <div className="mt-3 flex flex-col">
+        <div className="flex items-center justify-between border-b-[1.5px] border-dashed border-[var(--rule)] py-2.5">
+          <span className="hand text-[21px] text-[var(--ink-muted)]">sound</span>
+          <YesNo value={settings.sound} onChange={(v) => update({ sound: v })} />
+        </div>
+        <div className="flex items-center justify-between border-b-[1.5px] border-dashed border-[var(--rule)] py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="hand text-[21px] text-[var(--ink-muted)]">vibration</p>
+            <p className="caption">iPhone ignores this — Android and desktop honour it</p>
+          </div>
+          <YesNo value={settings.vibration} onChange={(v) => update({ vibration: v })} />
+        </div>
+        <div className="py-2.5">
+          <div className="flex items-center justify-between">
+            <span className="hand text-[21px] text-[var(--ink-muted)]">notifications</span>
+            {permission === 'granted' ? (
+              <YesNo
+                value={settings.notifications}
+                onChange={(v) => update({ notifications: v })}
+              />
+            ) : (
+              <Button
+                variant="secondary"
+                className="shrink-0 px-3 text-[14px]"
+                onClick={enableNotifications}
+                disabled={permission === 'denied' || permission === 'unsupported'}
+              >
+                Turn on
+              </Button>
+            )}
+          </div>
+          {permission === 'denied' && (
+            <p className="caption mt-1">
+              Blocked. iOS won't let the app ask again — turn it back on under
+              Settings › Notifications › Atlas.
+            </p>
+          )}
+          {permission === 'unsupported' && (
+            <p className="caption mt-1">
+              This browser has no notifications. Install Atlas to the home
+              screen to get them.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <span className="annot mt-2 block">tone</span>
+      <div className="mt-1.5 flex flex-col gap-1.5">
+        {TONES.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => {
+              update({ tone: t.id });
+              unlockAudio();
+              if (settings.sound) playAlarm(t.id);
+            }}
+            className="relative flex items-center justify-between px-3 py-2 text-left"
+            style={
+              settings.tone === t.id
+                ? { background: 'var(--btn-fill)', color: 'var(--btn-text)', borderRadius: 5 }
+                : undefined
+            }
+          >
+            {settings.tone !== t.id && <SketchBorder radius={5} strokeWidth={1.8} stroke="var(--rule)" />}
+            <span className="relative text-[15px] font-semibold">{t.label}</span>
+            <span
+              className="relative text-[12px]"
+              style={{ color: settings.tone === t.id ? 'var(--btn-text)' : 'var(--ink-muted)' }}
+            >
+              {t.hint}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <Button variant="secondary" className="mt-3 w-full" onClick={test} disabled={testing}>
+        {testing ? 'Sounding…' : 'Test alarm'}
+      </Button>
+
+      <p className="caption mt-2">
+        With the screen locked, iOS plays its own notification sound rather
+        than the tone above — that's the platform, not a fault here.
+      </p>
+    </SketchCard>
   );
 }
 

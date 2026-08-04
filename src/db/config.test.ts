@@ -335,6 +335,48 @@ describe('training state: serialized writes', () => {
     expect((await config.getTrainingState()).pointer).toBe(2);
   });
 
+  // ── Rest alarm settings ────────────────────────────────────────────────
+
+  it('every alarm channel is on by default, and the prompt has not been asked', async () => {
+    const s = await config.getAlarmSettings();
+    expect(s.sound).toBe(true);
+    expect(s.vibration).toBe(true);
+    expect(s.notifications).toBe(true);
+    expect(s.tone).toBe('bell');
+    // Nothing has been asked yet — the permission prompt waits for the first
+    // rest timer rather than firing on launch.
+    expect(s.askedToNotify).toBe(false);
+  });
+
+  it('a partially stored alarm setting merges over the defaults', async () => {
+    // Written by an older build that had no tone picker: the missing keys
+    // must fill in rather than coming back undefined.
+    const schema = await import('./schema');
+    await schema.db.config.put({ key: 'alarmSettings', value: { sound: false } });
+
+    const s = await config.getAlarmSettings();
+    expect(s.sound).toBe(false);
+    expect(s.vibration).toBe(true);
+    expect(s.tone).toBe('bell');
+  });
+
+  it('alarm settings round-trip', async () => {
+    await config.saveAlarmSettings({
+      ...config.DEFAULT_ALARM_SETTINGS,
+      sound: false,
+      tone: 'beeps',
+      askedToNotify: true,
+    });
+    const s = await config.getAlarmSettings();
+    expect(s).toEqual({
+      sound: false,
+      vibration: true,
+      notifications: true,
+      tone: 'beeps',
+      askedToNotify: true,
+    });
+  });
+
   it('migrates a pre-unlock stored plan (legs still the old locked squat/RDL pair) to the new list, once', async () => {
     // Simulate a plan saved back when the lock still enforced the old pair —
     // this could only ever have been saved as exactly this, never anything

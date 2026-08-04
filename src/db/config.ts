@@ -1,4 +1,5 @@
 import { db, type Workout, type WorkoutExercise } from './schema';
+import { DEFAULT_TONE, type ToneId } from '../alarm';
 import { DEFAULT_RAMP, type RampConfig } from '../domain/ramp';
 import {
   DEFAULT_MODULE_FLAGS,
@@ -674,6 +675,45 @@ export async function getCraftGoalMin(): Promise<number> {
 
 export function saveCraftGoalMin(min: number): Promise<void> {
   return set('craftGoalMin', min);
+}
+
+// ── Rest alarm ───────────────────────────────────────────────────────────
+
+/**
+ * How the rest timer announces itself. Every channel is independent because
+ * they fail in different places: sound is useless with headphones in,
+ * vibration does nothing on iOS Safari, and notifications are the only one
+ * that works with the screen locked.
+ */
+export interface AlarmSettings {
+  sound: boolean;
+  vibration: boolean;
+  notifications: boolean;
+  tone: ToneId;
+  /**
+   * Whether the in-app "shall I ask?" card has been answered. Kept separate
+   * from the browser's own permission state so declining our card doesn't
+   * burn the one chance at the system prompt — it can be offered again from
+   * Settings, whereas an actual denial is final.
+   */
+  askedToNotify: boolean;
+}
+
+export const DEFAULT_ALARM_SETTINGS: AlarmSettings = {
+  sound: true,
+  vibration: true,
+  notifications: true,
+  tone: DEFAULT_TONE,
+  askedToNotify: false,
+};
+
+export async function getAlarmSettings(): Promise<AlarmSettings> {
+  const stored = await get<Partial<AlarmSettings>>('alarmSettings');
+  return { ...DEFAULT_ALARM_SETTINGS, ...stored };
+}
+
+export function saveAlarmSettings(s: AlarmSettings): Promise<void> {
+  return set('alarmSettings', s);
 }
 
 // ── Export reminder ──────────────────────────────────────────────────────

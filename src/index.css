@@ -227,6 +227,23 @@ input[type='date'] {
   padding-top: max(1rem, env(safe-area-inset-top));
 }
 
+/* Rest is over. Flashes a handful of times and then settles into the done
+   state — a permanent pulse in your eyeline between sets would be its own
+   kind of nagging. */
+@keyframes atlas-rest-flash {
+  0%,
+  100% {
+    background-color: var(--paper);
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--success) 26%, var(--paper));
+  }
+}
+
+.rest-flash {
+  animation: atlas-rest-flash 0.8s ease-in-out 4;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
