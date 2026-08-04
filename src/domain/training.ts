@@ -79,6 +79,43 @@ export function sessionFor(state: TrainingState, date: ISODate): string {
 }
 
 /**
+ * A session with no logged sets is not a session. It never counts as
+ * complete, never advances the pointer, and is never stored — see
+ * finishTrainingSession, which discards one silently rather than recording
+ * an empty row. Guard with this everywhere rather than checking
+ * `exercises.length` directly: an exercise can exist in the row with an
+ * empty `sets` array, and that is still nothing logged.
+ */
+export function hasLoggedSets(workout: Pick<Workout, 'exercises'>): boolean {
+  return workout.exercises.some((e) => e.sets.length > 0);
+}
+
+/**
+ * Where the pointer belongs given the sessions that actually happened.
+ *
+ * Used when history changes underneath the pointer — a session deleted, or
+ * an empty phantom row cleaned up. The queue's rule is that a completed
+ * session moves the pointer one past its own slot, so the position implied
+ * by history is simply "one after the most recent session's slot". Rest
+ * slots in between are handled by passRestDays as days elapse, exactly as
+ * they would have been the first time through.
+ *
+ * Returns null when history can't determine a position — no sessions left
+ * (caller should reset to 0), or a session type no longer in the split
+ * (caller should leave the pointer alone rather than guess).
+ */
+export function pointerFromHistory(
+  split: string[],
+  completed: Pick<Workout, 'date' | 'sessionType'>[],
+): number | null {
+  if (completed.length === 0) return 0;
+  const latest = [...completed].sort((a, b) => a.date.localeCompare(b.date)).at(-1)!;
+  const idx = split.indexOf(latest.sessionType);
+  if (idx === -1) return null;
+  return idx + 1;
+}
+
+/**
  * Manual override: jump the pointer to the NEAREST occurrence of
  * `sessionType` in the split, searching forward from the current pointer
  * (wrapping once) so picking "rest" from a split with two rest slots lands

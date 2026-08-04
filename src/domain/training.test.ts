@@ -3,10 +3,12 @@ import { DEFAULT_TRAINING_STATE, type TrainingState } from '../db/config';
 import {
   advanceAfterSession,
   currentSlot,
+  hasLoggedSets,
   lastTimeFor,
   overloadHint,
   overrideToSession,
   passRestDays,
+  pointerFromHistory,
   sessionFor,
 } from './training';
 import type { Workout } from '../db/schema';
@@ -94,6 +96,44 @@ describe('the queue', () => {
     const s: TrainingState = { ...base, mode: 'fixed' };
     expect(sessionFor(s, '2026-08-03')).toBe('back'); // Monday
     expect(sessionFor(s, '2026-08-05')).toBe('rest'); // Wednesday
+  });
+});
+
+describe('a session with nothing logged', () => {
+  it('is not a session, however the empty row is shaped', () => {
+    expect(hasLoggedSets({ exercises: [] })).toBe(false);
+    // An exercise can be present with no sets under it — still nothing logged.
+    expect(hasLoggedSets({ exercises: [{ name: 'Back squat', sets: [] }] })).toBe(false);
+    expect(
+      hasLoggedSets({ exercises: [{ name: 'Back squat', sets: [{ reps: 5, weight: 100 }] }] }),
+    ).toBe(true);
+  });
+});
+
+describe('pointer recomputed from history', () => {
+  it('lands one past the most recent session, wherever that sits in the split', () => {
+    expect(pointerFromHistory(SPLIT, [{ date: '2026-08-03', sessionType: 'back' }])).toBe(1);
+    expect(pointerFromHistory(SPLIT, [{ date: '2026-08-03', sessionType: 'legs' }])).toBe(4);
+    expect(pointerFromHistory(SPLIT, [{ date: '2026-08-03', sessionType: 'chest' }])).toBe(5);
+  });
+
+  it('reads the most recent by date, not by array order', () => {
+    const out = pointerFromHistory(SPLIT, [
+      { date: '2026-08-04', sessionType: 'shoulders' },
+      { date: '2026-08-01', sessionType: 'chest' },
+      { date: '2026-08-02', sessionType: 'back' },
+    ]);
+    expect(out).toBe(2); // shoulders is index 1 — one past it is 2
+  });
+
+  it('resets to the start of the split when no sessions remain', () => {
+    expect(pointerFromHistory(SPLIT, [])).toBe(0);
+  });
+
+  it('declines to guess when the session type is no longer in the split', () => {
+    // The split was edited and 'arms' dropped out. Returning null lets the
+    // caller leave the pointer where it is rather than invent a position.
+    expect(pointerFromHistory(SPLIT, [{ date: '2026-08-03', sessionType: 'arms' }])).toBeNull();
   });
 });
 

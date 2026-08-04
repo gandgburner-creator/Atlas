@@ -33,14 +33,23 @@ describe('training state: serialized writes', () => {
     config = await import('./config');
   });
 
+  /** Start a session and log one real set into it. A session with nothing
+   * logged is discarded on finish, so anything asserting on the pointer has
+   * to put actual work in first. */
+  async function startWithASet(date: string, sessionType: string): Promise<number> {
+    const id = await config.startTrainingSession(date, sessionType);
+    await config.updateWorkout(id, [{ name: 'Something', sets: [{ reps: 8, weight: 60 }] }]);
+    return id;
+  }
+
   it('finishing one session advances the pointer by exactly one position', async () => {
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const id = await config.startTrainingSession(TODAY, 'back');
+    const id = await startWithASet(TODAY, 'back');
     const record = await config.finishTrainingSession(id, TODAY);
     const state = await config.getTrainingState();
     expect(state.pointer).toBe(1);
     expect(SPLIT[state.pointer % SPLIT.length]).toBe('shoulders');
-    expect(record.sessionType).toBe('back');
+    expect(record?.sessionType).toBe('back');
   });
 
   it('a concurrent day-boundary check cannot compound with a finish into more than one advance', async () => {
@@ -50,7 +59,7 @@ describe('training state: serialized writes', () => {
     // chain now, so no interleaving can move the pointer by more than the
     // one step "Finish" is entitled to.
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const id = await config.startTrainingSession(TODAY, 'back');
+    const id = await startWithASet(TODAY, 'back');
 
     await Promise.all([
       config.autoPassRestDays(TODAY),
@@ -73,7 +82,7 @@ describe('training state: serialized writes', () => {
       if (passed === 'rest') {
         await config.skipRestDay(TODAY);
       } else {
-        const id = await config.startTrainingSession(TODAY, passed);
+        const id = await startWithASet(TODAY, passed);
         await config.finishTrainingSession(id, TODAY);
       }
     }
@@ -96,7 +105,7 @@ describe('training state: serialized writes', () => {
     expect(state.pointer).toBe(0); // back to where it was before finishing
 
     const reopened = await config.getTodaysInProgressWorkout(TODAY);
-    expect(reopened?.id).toBe(record.workoutId); // same row, not a duplicate
+    expect(reopened?.id).toBe(record?.workoutId); // same row, not a duplicate
     expect(reopened?.exercises[0]?.sets).toHaveLength(1);
 
     // Nothing left to undo once it's been undone.
@@ -114,7 +123,7 @@ describe('training state: serialized writes', () => {
     ]);
     const second = await config.finishTrainingSession(id, TODAY);
 
-    expect(second.workoutId).toBe(first.workoutId);
+    expect(second?.workoutId).toBe(first?.workoutId);
     const schema = await import('./schema');
     const rows = await schema.db.workouts.where({ date: TODAY, sessionType: 'back' }).toArray();
     expect(rows).toHaveLength(1);
@@ -133,9 +142,9 @@ describe('training state: serialized writes', () => {
 
   it('deleting a workout clears the undo banner only when it was the one just finished', async () => {
     await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
-    const id = await config.startTrainingSession(TODAY, 'back');
+    const id = await startWithASet(TODAY, 'back');
     const record = await config.finishTrainingSession(id, TODAY);
-    await config.deleteWorkout(record.workoutId);
+    await config.deleteWorkout(record!.workoutId);
     expect(await config.getLastFinish()).toBeUndefined();
   });
 
@@ -157,6 +166,173 @@ describe('training state: serialized writes', () => {
     });
     const plans = await config.getExercisePlans();
     expect(plans.legs).toEqual(rebuilt);
+  });
+
+  // ── Reported bug 1: opening the log screen registered a session ────────
+  //
+  // Three phantom sessions reached real data this way — an empty legs
+  // session, an empty chest session logged while demoing the app, and an
+  // empty back session. Each one burned a slot in the queue.
+
+  it('finishing with nothing logged discards the session and leaves the pointer alone', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await config.startTrainingSession(TODAY, 'back');
+
+    const record = await config.finishTrainingSession(id, TODAY);
+
+    expect(record).toBeNull();
+    const state = await config.getTrainingState();
+    expect(state.pointer).toBe(0); // still 'back' — nothing happened
+    const schema = await import('./schema');
+    expect(await schema.db.workouts.get(id)).toBeUndefined(); // row discarded
+    expect(await config.getLastFinish()).toBeUndefined(); // nothing to undo
+  });
+
+  it('a discarded empty session leaves no trace in history', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const schema = await import('./schema');
+
+    // Open-and-close three times over, as happened for real.
+    for (const [date, type] of [
+      ['2026-07-31', 'legs'],
+      ['2026-08-03', 'chest'],
+      ['2026-08-04', 'back'],
+    ] as const) {
+      const id = await config.startTrainingSession(date, type);
+      await config.finishTrainingSession(id, date);
+    }
+
+    expect(await schema.db.workouts.count()).toBe(0);
+    expect((await config.getTrainingState()).pointer).toBe(0);
+  });
+
+  it('an exercise carrying no sets still counts as nothing logged', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await config.startTrainingSession(TODAY, 'back');
+    await config.updateWorkout(id, [{ name: 'Pull-ups', sets: [] }]);
+
+    expect(await config.finishTrainingSession(id, TODAY)).toBeNull();
+    expect((await config.getTrainingState()).pointer).toBe(0);
+  });
+
+  it('cleans up sessions already stored empty, and puts the pointer back', async () => {
+    const schema = await import('./schema');
+    // A real session, then two phantoms that pushed the pointer past it.
+    await schema.db.workouts.add({
+      date: '2026-07-30',
+      sessionType: 'back',
+      exercises: [{ name: 'Pull-ups', sets: [{ reps: 8, weight: 0 }] }],
+      status: 'complete',
+    });
+    await schema.db.workouts.add({
+      date: '2026-07-31', sessionType: 'legs', exercises: [], status: 'complete',
+    });
+    await schema.db.workouts.add({
+      date: '2026-08-03', sessionType: 'chest', exercises: [], status: 'complete',
+    });
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 5 });
+
+    const removed = await config.cleanupEmptySessions();
+
+    expect(removed).toBe(2);
+    expect(await schema.db.workouts.count()).toBe(1); // only the real one left
+    // 'back' is index 0, so the queue is back to 'shoulders' — where it
+    // stood before the phantoms pushed it along.
+    const state = await config.getTrainingState();
+    expect(state.pointer).toBe(1);
+    expect(SPLIT[state.pointer % SPLIT.length]).toBe('shoulders');
+  });
+
+  it('the cleanup is a no-op once there is nothing empty left', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await startWithASet(TODAY, 'back');
+    await config.finishTrainingSession(id, TODAY);
+    const before = await config.getTrainingState();
+
+    expect(await config.cleanupEmptySessions()).toBe(0);
+    expect(await config.getTrainingState()).toEqual(before); // pointer untouched
+  });
+
+  // ── Reported bug 2: the session switcher did nothing ───────────────────
+
+  it('switching session works for every type, including one already trained today', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    // Train chest today and finish it — the old UI then greyed chest out.
+    const done = await startWithASet(TODAY, 'chest');
+    await config.finishTrainingSession(done, TODAY);
+
+    await config.switchSession('chest', TODAY);
+
+    const state = await config.getTrainingState();
+    expect(SPLIT[state.pointer % SPLIT.length]).toBe('chest');
+  });
+
+  it('switching retargets the open session so the screen actually changes', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await startWithASet(TODAY, 'back');
+
+    await config.switchSession('legs', TODAY);
+
+    // The row the log screen reads its title from now says legs — moving
+    // only the pointer used to leave it stuck on 'back'.
+    const open = await config.getTodaysInProgressWorkout(TODAY);
+    expect(open?.id).toBe(id);
+    expect(open?.sessionType).toBe('legs');
+    expect(open?.exercises[0]?.sets).toHaveLength(1); // logged work kept
+    expect(SPLIT[(await config.getTrainingState()).pointer % SPLIT.length]).toBe('legs');
+  });
+
+  it('switching away from an untouched session discards its row rather than relabelling it', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await config.startTrainingSession(TODAY, 'back');
+
+    await config.switchSession('legs', TODAY);
+
+    const schema = await import('./schema');
+    expect(await schema.db.workouts.get(id)).toBeUndefined();
+    expect(await config.getTodaysInProgressWorkout(TODAY)).toBeUndefined();
+  });
+
+  // ── Reported bug 3: deleting a session left the pointer advanced ───────
+
+  it('deleting the most recent session rolls the pointer back to before it', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const backId = await startWithASet('2026-08-01', 'back');
+    await config.finishTrainingSession(backId, '2026-08-01');
+    const shouldersId = await startWithASet('2026-08-02', 'shoulders');
+    await config.finishTrainingSession(shouldersId, '2026-08-02');
+    expect((await config.getTrainingState()).pointer).toBe(2);
+
+    await config.deleteWorkout(shouldersId);
+
+    // Back to one past 'back' — exactly where it stood before shoulders.
+    const state = await config.getTrainingState();
+    expect(state.pointer).toBe(1);
+    expect(SPLIT[state.pointer % SPLIT.length]).toBe('shoulders');
+  });
+
+  it('deleting the only session resets the pointer to the start of the split', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await startWithASet(TODAY, 'back');
+    await config.finishTrainingSession(id, TODAY);
+
+    await config.deleteWorkout(id);
+
+    expect((await config.getTrainingState()).pointer).toBe(0);
+  });
+
+  it('deleting an OLDER session leaves the pointer alone', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const backId = await startWithASet('2026-08-01', 'back');
+    await config.finishTrainingSession(backId, '2026-08-01');
+    const shouldersId = await startWithASet('2026-08-02', 'shoulders');
+    await config.finishTrainingSession(shouldersId, '2026-08-02');
+
+    await config.deleteWorkout(backId);
+
+    // Shoulders is still the most recent session, so the queue's position
+    // is unchanged — and rest days passed since must not be undone.
+    expect((await config.getTrainingState()).pointer).toBe(2);
   });
 
   it('migrates a pre-unlock stored plan (legs still the old locked squat/RDL pair) to the new list, once', async () => {

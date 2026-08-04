@@ -7,8 +7,10 @@ import {
 } from '../domain/commitments';
 import {
   advanceAfterSession,
+  hasLoggedSets,
   overrideToSession,
   passRestDays,
+  pointerFromHistory,
 } from '../domain/training';
 
 /**
@@ -295,10 +297,14 @@ function saveLastFinish(f: LastFinish | null): Promise<void> {
 }
 
 /**
- * Start a session: create its workout row immediately, before a single set
- * is logged, so nothing is ever held only in component state pending a
- * later save. Callers should check getInProgressWorkout() first and only
- * start a new one when there isn't one open already.
+ * Create the row a session's sets will be written to.
+ *
+ * Called on the FIRST LOGGED SET, never on opening the screen. Merely
+ * looking at today's workout must leave no trace: an empty row would show
+ * up in history, count as a session, and advance the pointer, so opening
+ * the app to check what's next would silently burn a slot in the queue.
+ * Nothing here is lost by waiting — the row is created before the first
+ * set's write lands, which is the only moment there is anything to save.
  */
 export function startTrainingSession(today: string, sessionType: string): Promise<number> {
   return queueTraining(async () => {
@@ -339,11 +345,27 @@ export function getStaleInProgressWorkout(today: string): Promise<Workout | unde
  * the CURRENT state fresh, inside the queue, rather than trusting whatever
  * the caller's UI last rendered — a screen that's been open a while must
  * not be able to advance the queue from a stale snapshot.
+ *
+ * Finishing with NOTHING LOGGED is not a session. The row is discarded
+ * silently, the pointer stays exactly where it was, and no undo record is
+ * written — there is nothing to undo, and nothing happened. Returns null in
+ * that case, so callers can tell "finished" from "there was nothing here".
  */
-export function finishTrainingSession(workoutId: number, today: string): Promise<LastFinish> {
+export function finishTrainingSession(
+  workoutId: number,
+  today: string,
+): Promise<LastFinish | null> {
   return queueTraining(async () => {
     const workout = await db.workouts.get(workoutId);
-    if (!workout) throw new Error(`finishTrainingSession: no workout ${workoutId}`);
+    if (!workout) return null;
+
+    // Opened, looked at, closed again. Leave the queue untouched.
+    if (!hasLoggedSets(workout)) {
+      await db.workouts.delete(workoutId);
+      const record = await getLastFinish();
+      if (record?.workoutId === workoutId) await saveLastFinish(null);
+      return null;
+    }
 
     const fresh = await getTrainingState();
     const passed = passRestDays(fresh, today);
@@ -410,15 +432,111 @@ export function overrideNextSession(sessionType: string, today: string): Promise
   });
 }
 
-/** Delete a past session outright. Routed through the same queue as every
- * other training write so it can't land mid-finish and clobber an upsert. */
+/**
+ * Recompute and store the pointer from the sessions that remain. Call
+ * inside the training queue, after history has changed underneath it.
+ *
+ * Deliberately only ever called when the change actually invalidates the
+ * pointer (the most recent session went away). Recomputing on any other
+ * edit would clobber rest days that have legitimately passed since.
+ */
+async function repointFromHistory(): Promise<void> {
+  const state = await getTrainingState();
+  const completed = (await db.workouts.toArray()).filter(
+    (w) => w.status !== 'in_progress' && hasLoggedSets(w),
+  );
+  const pointer = pointerFromHistory(state.split, completed);
+  if (pointer === null) return; // Session type no longer in the split — don't guess.
+  await saveTrainingState({ ...state, pointer, lastRestPass: undefined });
+}
+
+/**
+ * Delete a session outright. Routed through the same queue as every other
+ * training write so it can't land mid-finish and clobber an upsert.
+ *
+ * Deleting the MOST RECENT session rolls the pointer back to where it stood
+ * before that session — the session is gone, so the advance it caused has
+ * to go with it, or the queue silently skips whatever was next. Deleting an
+ * older one leaves the pointer alone: the most recent session still implies
+ * the same position, and recomputing anyway would discard rest days that
+ * have passed since.
+ */
 export function deleteWorkout(id: number): Promise<void> {
   return queueTraining(async () => {
+    const doomed = await db.workouts.get(id);
+    const wasLatest =
+      doomed !== undefined &&
+      hasLoggedSets(doomed) &&
+      !(await db.workouts.toArray()).some(
+        (w) =>
+          w.id !== id &&
+          w.status !== 'in_progress' &&
+          hasLoggedSets(w) &&
+          w.date.localeCompare(doomed.date) > 0,
+      );
+
     await db.workouts.delete(id);
     // Deleting the session the undo banner points at retires the banner —
     // there's nothing left to reopen.
     const record = await getLastFinish();
     if (record?.workoutId === id) await saveLastFinish(null);
+
+    if (wasLatest) await repointFromHistory();
+  });
+}
+
+/**
+ * Switch what today's session IS — the manual override, and it works
+ * unconditionally. Every session type is a valid target, including the one
+ * already showing and one already trained today; there is no state in which
+ * an option is unavailable, because the whole point is overruling whatever
+ * the queue decided.
+ *
+ * Moving the pointer alone isn't enough: an in-progress row's own
+ * sessionType is what the log screen displays, so it has to come along or
+ * the switch appears to do nothing. An untouched row is deleted; one with
+ * sets logged is retargeted, since those sets are real work and deleting
+ * them to honour a relabel would be the wrong trade.
+ */
+export function switchSession(sessionType: string, today: string): Promise<TrainingState> {
+  return queueTraining(async () => {
+    const open = await db.workouts
+      .where({ date: today })
+      .filter((w) => w.status === 'in_progress')
+      .first();
+    if (open?.id !== undefined) {
+      if (hasLoggedSets(open)) await db.workouts.update(open.id, { sessionType });
+      else await db.workouts.delete(open.id);
+    }
+
+    const fresh = await getTrainingState();
+    const next = overrideToSession(fresh, sessionType, today);
+    await saveTrainingState(next);
+    return next;
+  });
+}
+
+/**
+ * One-time repair for sessions that were created just by opening the log
+ * screen, before that stopped happening. Each one is an empty row that
+ * counted as a session and pushed the queue forward a slot, so removing
+ * them has to put the pointer back too.
+ *
+ * Safe to call on every app open: once the empties are gone it finds
+ * nothing and touches neither the rows nor the pointer. Runs at startup,
+ * before the UI can create anything, so it can never race a real session.
+ */
+export function cleanupEmptySessions(): Promise<number> {
+  return queueTraining(async () => {
+    const empties = (await db.workouts.toArray()).filter((w) => !hasLoggedSets(w));
+    if (empties.length === 0) return 0;
+
+    await db.workouts.bulkDelete(empties.map((w) => w.id as number));
+    const record = await getLastFinish();
+    if (record && empties.some((w) => w.id === record.workoutId)) await saveLastFinish(null);
+
+    await repointFromHistory();
+    return empties.length;
   });
 }
 

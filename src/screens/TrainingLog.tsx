@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { PushHeader } from '../components/Chrome';
@@ -8,11 +8,11 @@ import {
   getExercisePlans,
   getTodaysInProgressWorkout,
   getTrainingState,
-  overrideNextSession,
   saveExercisePlans,
   saveTrainingState,
   skipRestDay,
   startTrainingSession,
+  switchSession,
   updateWorkout,
   type ExerciseDef,
 } from '../db/config';
@@ -76,20 +76,6 @@ export function TrainingLog({ today }: Props) {
     setLoadedFor(data.inProgress.id ?? null);
   }
 
-  // Starting a session creates its Dexie row the instant it's opened — the
-  // record must exist before a single set is logged, never held only in
-  // this component's state. Guarded per session type so a pending creation
-  // isn't re-fired on every render, and re-armed once the pointer moves on.
-  const startedForRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!data) return;
-    const { state, session, inProgress } = data;
-    if (state.pause || session === 'rest' || inProgress) return;
-    if (startedForRef.current === session) return;
-    startedForRef.current = session;
-    void startTrainingSession(today, session);
-  }, [data, today]);
-
   if (!data) return null;
   const { state, plans, workouts, session, inProgress } = data;
   const paused = Boolean(state.pause);
@@ -100,23 +86,27 @@ export function TrainingLog({ today }: Props) {
   const exercises = plans[activeSession] ?? [];
   const last = lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
 
+  /** The row for this session, created on demand. Opening the screen must
+   * leave no trace, so this is only ever reached from a real logged set. */
   async function ensureWorkoutId(): Promise<number> {
     if (inProgress?.id) return inProgress.id;
     if (!startPromiseRef.current) {
-      startPromiseRef.current = startTrainingSession(today, session);
+      startPromiseRef.current = startTrainingSession(today, activeSession);
     }
     return startPromiseRef.current;
   }
 
   async function persist(nextDraft: Draft) {
-    const id = await ensureWorkoutId();
     const done: WorkoutExercise[] = Object.entries(nextDraft)
       .map(([name, sets]) => ({
         name,
         sets: sets.filter((s): s is WorkoutSet => s !== null),
       }))
       .filter((e) => e.sets.length > 0);
-    await updateWorkout(id, done);
+    // Clearing the last set of an untouched session must not conjure a row
+    // to store nothing in — no sets and no row yet means nothing happened.
+    if (done.length === 0 && !inProgress?.id && !startPromiseRef.current) return;
+    await updateWorkout(await ensureWorkoutId(), done);
   }
 
   function updateDraft(name: string, sets: (WorkoutSet | null)[]) {
@@ -130,10 +120,12 @@ export function TrainingLog({ today }: Props) {
   async function finish() {
     setFinishing(true);
     try {
-      // Zero sets logged is still a valid, complete session — the button is
-      // never disabled for it, and finishing it still advances the queue.
-      const id = await ensureWorkoutId();
-      await finishTrainingSession(id, today);
+      // Nothing logged means there is no session to finish: no row was ever
+      // created, so there is nothing to discard and the queue stays put.
+      // finishTrainingSession applies the same rule to a row that exists but
+      // is empty, so both routes leave the pointer alone.
+      const id = inProgress?.id ?? (await startPromiseRef.current) ?? null;
+      if (id !== null) await finishTrainingSession(id, today);
       nav.pop();
     } finally {
       setFinishing(false);
@@ -149,7 +141,13 @@ export function TrainingLog({ today }: Props) {
   }
 
   async function changeTo(type: string) {
-    await overrideNextSession(type, today);
+    // Retargets the open row as well as the pointer, so the screen actually
+    // changes — moving the pointer alone leaves an in-progress session
+    // showing its own old type and the switch looks like it did nothing.
+    await switchSession(type, today);
+    startPromiseRef.current = null;
+    setDraft({});
+    setLoadedFor(null);
     setChangeOpen(false);
   }
 
@@ -195,15 +193,24 @@ export function TrainingLog({ today }: Props) {
           </button>
           {changeOpen && (
             <div className="mt-2 flex flex-wrap gap-2">
+              {/* Never disabled, for any type, in any state — this is the
+                  manual override, and an override that can be unavailable
+                  is not one. The current session included: re-picking it is
+                  a harmless no-op, and greying it out just looks broken. */}
               {slotTypes.map((t) => (
                 <button
                   key={t}
                   onClick={() => changeTo(t)}
-                  disabled={t === session}
-                  className="relative px-3 py-2 text-[14px] font-semibold disabled:opacity-40"
-                  style={{ color: 'var(--ink)' }}
+                  className="relative px-3 py-2 text-[14px] font-semibold"
+                  style={
+                    t === activeSession
+                      ? { background: 'var(--btn-fill)', color: 'var(--btn-text)', borderRadius: 999 }
+                      : { color: 'var(--ink)' }
+                  }
                 >
-                  <SketchBorder radius={999} strokeWidth={1.8} stroke="var(--rule)" />
+                  {t !== activeSession && (
+                    <SketchBorder radius={999} strokeWidth={1.8} stroke="var(--rule)" />
+                  )}
                   <span className="relative">{t}</span>
                 </button>
               ))}
