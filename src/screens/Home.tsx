@@ -104,7 +104,11 @@ export function Home({ ramp, today }: Props) {
     if (!stale?.id) return;
     setBusy(true);
     try {
-      await finishTrainingSession(stale.id, today);
+      // Closed at its last set, not now — this session is from a previous
+      // day by definition, so "now" would record a duration spanning the
+      // night. No prompt: there is no plausible reading where a session
+      // left open yesterday actually ended today.
+      await finishTrainingSession(stale.id, today, stale.lastSetAt);
     } finally {
       setBusy(false);
     }

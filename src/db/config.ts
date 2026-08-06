@@ -351,10 +351,15 @@ export function getStaleInProgressWorkout(today: string): Promise<Workout | unde
  * silently, the pointer stays exactly where it was, and no undo record is
  * written — there is nothing to undo, and nothing happened. Returns null in
  * that case, so callers can tell "finished" from "there was nothing here".
+ *
+ * `endedAt` defaults to now, but a session whose last set was hours ago is
+ * closed at that last set instead, so a forgotten finish tap doesn't record
+ * a fourteen-hour workout. The caller decides which; see isStale.
  */
 export function finishTrainingSession(
   workoutId: number,
   today: string,
+  endedAt: number = Date.now(),
 ): Promise<LastFinish | null> {
   return queueTraining(async () => {
     const workout = await db.workouts.get(workoutId);
@@ -370,7 +375,10 @@ export function finishTrainingSession(
 
     const fresh = await getTrainingState();
     const passed = passRestDays(fresh, today);
-    await db.workouts.update(workoutId, { status: 'complete' });
+    await db.workouts.update(workoutId, {
+      status: 'complete',
+      ...withTiming(workout, { endedAt }),
+    });
 
     const next = advanceAfterSession(passed, today);
     await saveTrainingState(next);
@@ -541,12 +549,65 @@ export function cleanupEmptySessions(): Promise<number> {
   });
 }
 
-/** Write a session's logged sets — called after every single set while a
+/**
+ * The one place startedAt/endedAt/durationMs are written together, so the
+ * stored duration can never drift from the two timestamps it comes from.
+ * Pass the pieces that changed; the duration follows.
+ */
+export function withTiming(
+  current: Pick<Workout, 'startedAt' | 'endedAt'>,
+  patch: { startedAt?: number; endedAt?: number },
+): Partial<Workout> {
+  const startedAt = patch.startedAt ?? current.startedAt;
+  const endedAt = patch.endedAt ?? current.endedAt;
+  return {
+    startedAt,
+    endedAt,
+    durationMs:
+      startedAt !== undefined && endedAt !== undefined
+        ? Math.max(0, endedAt - startedAt)
+        : undefined,
+  };
+}
+
+/**
+ * Write a session's logged sets — called after every single set while a
  * session is in progress (the autosave), and from the history editor for a
- * past one. */
-export function updateWorkout(id: number, exercises: WorkoutExercise[]): Promise<void> {
+ * past one.
+ *
+ * `at` timestamps the set. The first one also becomes the session's
+ * startedAt, which is why timing begins at real work rather than at the
+ * moment the screen opened.
+ */
+export function updateWorkout(
+  id: number,
+  exercises: WorkoutExercise[],
+  at?: number,
+): Promise<void> {
   return queueTraining(async () => {
-    await db.workouts.update(id, { exercises });
+    if (at === undefined) {
+      await db.workouts.update(id, { exercises });
+      return;
+    }
+    const current = await db.workouts.get(id);
+    await db.workouts.update(id, {
+      exercises,
+      lastSetAt: at,
+      ...(current?.startedAt === undefined ? { startedAt: at } : {}),
+    });
+  });
+}
+
+/** Correct a session's timing after the fact, for when the automatic
+ * end-time detection got it wrong. */
+export function retimeWorkout(
+  id: number,
+  patch: { startedAt?: number; endedAt?: number },
+): Promise<void> {
+  return queueTraining(async () => {
+    const current = await db.workouts.get(id);
+    if (!current) return;
+    await db.workouts.update(id, withTiming(current, patch));
   });
 }
 

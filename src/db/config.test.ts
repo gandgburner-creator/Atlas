@@ -335,6 +335,89 @@ describe('training state: serialized writes', () => {
     expect((await config.getTrainingState()).pointer).toBe(2);
   });
 
+  // ── Session timing ─────────────────────────────────────────────────────
+
+  it('the clock starts at the first logged set, not when the row was created', async () => {
+    const schema = await import('./schema');
+    const id = await config.startTrainingSession(TODAY, 'back');
+    // Row exists, nothing logged: no timing yet, because nothing happened.
+    expect((await schema.db.workouts.get(id))?.startedAt).toBeUndefined();
+
+    const first = Date.UTC(2026, 7, 4, 18, 0);
+    await config.updateWorkout(id, [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }] }], first);
+    const started = await schema.db.workouts.get(id);
+    expect(started?.startedAt).toBe(first);
+    expect(started?.lastSetAt).toBe(first);
+  });
+
+  it('every later set moves lastSetAt but never rewrites the start', async () => {
+    const schema = await import('./schema');
+    const id = await config.startTrainingSession(TODAY, 'back');
+    const first = Date.UTC(2026, 7, 4, 18, 0);
+    const later = Date.UTC(2026, 7, 4, 18, 40);
+    await config.updateWorkout(id, [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }] }], first);
+    await config.updateWorkout(
+      id,
+      [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }, { reps: 8, weight: 80 }] }],
+      later,
+    );
+
+    const w = await schema.db.workouts.get(id);
+    expect(w?.startedAt).toBe(first);
+    expect(w?.lastSetAt).toBe(later);
+  });
+
+  it('finishing stores endedAt and a duration that agrees with it', async () => {
+    const schema = await import('./schema');
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await config.startTrainingSession(TODAY, 'back');
+    const start = Date.UTC(2026, 7, 4, 18, 0);
+    const end = Date.UTC(2026, 7, 4, 19, 15);
+    await config.updateWorkout(id, [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }] }], start);
+
+    await config.finishTrainingSession(id, TODAY, end);
+
+    const w = await schema.db.workouts.get(id);
+    expect(w?.endedAt).toBe(end);
+    expect(w?.durationMs).toBe(75 * 60_000);
+    expect(w?.durationMs).toBe((w?.endedAt as number) - (w?.startedAt as number));
+  });
+
+  it('a session finished at its last set records that, not the fourteen-hour gap', async () => {
+    const schema = await import('./schema');
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await config.startTrainingSession(TODAY, 'back');
+    const start = Date.UTC(2026, 7, 3, 18, 0);
+    const lastSet = Date.UTC(2026, 7, 3, 19, 10);
+    await config.updateWorkout(id, [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }] }], start);
+    await config.updateWorkout(
+      id,
+      [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }, { reps: 6, weight: 85 }] }],
+      lastSet,
+    );
+
+    // Noticed the next morning. Closed at the last set instead of now.
+    await config.finishTrainingSession(id, TODAY, lastSet);
+
+    const w = await schema.db.workouts.get(id);
+    expect(w?.durationMs).toBe(70 * 60_000);
+  });
+
+  it('retiming a session keeps the stored duration in step', async () => {
+    const schema = await import('./schema');
+    const id = await config.startTrainingSession(TODAY, 'back');
+    const start = Date.UTC(2026, 7, 4, 18, 0);
+    await config.updateWorkout(id, [{ name: 'Bench', sets: [{ reps: 8, weight: 80 }] }], start);
+    await config.finishTrainingSession(id, TODAY, Date.UTC(2026, 7, 4, 19, 0));
+
+    // The auto-detected end was wrong; correct it.
+    await config.retimeWorkout(id, { endedAt: Date.UTC(2026, 7, 4, 18, 40) });
+
+    const w = await schema.db.workouts.get(id);
+    expect(w?.durationMs).toBe(40 * 60_000);
+    expect(w?.startedAt).toBe(start); // untouched
+  });
+
   // ── Rest alarm settings ────────────────────────────────────────────────
 
   it('every alarm channel is on by default, and the prompt has not been asked', async () => {

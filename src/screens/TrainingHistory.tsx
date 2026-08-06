@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { PushHeader } from '../components/Chrome';
 import { SketchCard } from '../components/Sketch';
 import { db } from '../db/schema';
+import { durationOf, formatDuration } from '../domain/sessionTime';
 import { formatDayLabel } from '../domain/time';
 import { useNav } from '../nav';
 
@@ -26,6 +27,9 @@ export function TrainingHistory() {
 
       {sessions?.map((w) => {
         const setCount = w.exercises.reduce((n, e) => n + e.sets.length, 0);
+        // Absent on sessions logged before timing existed, and on any still
+        // open — shown only where there's a real figure, never as a zero.
+        const duration = durationOf(w);
         return (
           <button
             key={w.id}
@@ -40,7 +44,13 @@ export function TrainingHistory() {
               <p className="caption mt-0.5">
                 {w.exercises.length === 0
                   ? 'no sets logged'
-                  : `${w.exercises.length} ${w.exercises.length === 1 ? 'exercise' : 'exercises'} · ${setCount} ${setCount === 1 ? 'set' : 'sets'}`}
+                  : [
+                      `${w.exercises.length} ${w.exercises.length === 1 ? 'exercise' : 'exercises'}`,
+                      `${setCount} ${setCount === 1 ? 'set' : 'sets'}`,
+                      duration === null ? null : formatDuration(duration),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
               </p>
             </SketchCard>
           </button>

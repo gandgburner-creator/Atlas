@@ -139,6 +139,28 @@ export interface Workout {
    * were always saved whole under the pre-autosave model.
    */
   status?: 'in_progress' | 'complete';
+
+  // ── Timing ──────────────────────────────────────────────────────────
+  // Epoch millis, unlike `date` — a session is a real interval, and its
+  // duration and time of day are both instants rather than calendar days.
+  // All absent on sessions logged before timing existed, which is why
+  // every reader treats them as optional rather than backfilling a guess.
+
+  /** First logged set. NOT when the screen was opened — opening isn't
+   * training, and counting from there would inflate every session. */
+  startedAt?: number;
+  /** Most recent logged set. The evidence for whether a "finish" tapped
+   * hours later is real or forgotten (see STALE_GAP_MS). */
+  lastSetAt?: number;
+  /** When the session was closed out. Usually the finish tap, but a stale
+   * session is closed at its last set instead, on request. */
+  endedAt?: number;
+  /**
+   * endedAt − startedAt, stored rather than derived so a corrected session
+   * carries its correction. Always written together with the two above, by
+   * withTiming() in db/config.ts, so the three can never disagree.
+   */
+  durationMs?: number;
 }
 
 export interface FocusSession {

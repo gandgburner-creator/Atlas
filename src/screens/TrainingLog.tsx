@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { PushHeader } from '../components/Chrome';
@@ -17,6 +17,7 @@ import {
   type ExerciseDef,
 } from '../db/config';
 import { db, type WorkoutExercise, type WorkoutSet } from '../db/schema';
+import { formatClock, formatElapsed, isStale } from '../domain/sessionTime';
 import { lastTimeFor, passRestDays, sessionFor } from '../domain/training';
 import { formatDayLabel } from '../domain/time';
 import { useNav } from '../nav';
@@ -44,6 +45,10 @@ export function TrainingLog({ today }: Props) {
   const [finishing, setFinishing] = useState(false);
   const [pauseOpen, setPauseOpen] = useState(false);
   const [changeOpen, setChangeOpen] = useState(false);
+  // 'finish' — tapped finish after a long gap. 'resume' — walked back into a
+  // session that was left open. Same question either way: when did this end?
+  const [stalePrompt, setStalePrompt] = useState<'finish' | 'resume' | null>(null);
+  const [staleAcknowledged, setStaleAcknowledged] = useState(false);
   const restTimer = useRestTimer();
   // Bridges the gap between "user tapped log set" and "the row this session
   // writes to actually exists in Dexie" — only ever needed for the first set
@@ -76,6 +81,18 @@ export function TrainingLog({ today }: Props) {
     setLoadedFor(data.inProgress.id ?? null);
   }
 
+  // Walking back into a session whose last set was hours ago: the same
+  // question as a late finish, asked before more sets pile on top of a
+  // duration that's already wrong.
+  if (
+    data?.inProgress &&
+    stalePrompt === null &&
+    !staleAcknowledged &&
+    isStale(data.inProgress.lastSetAt, Date.now())
+  ) {
+    setStalePrompt('resume');
+  }
+
   if (!data) return null;
   const { state, plans, workouts, session, inProgress } = data;
   const paused = Boolean(state.pause);
@@ -106,7 +123,9 @@ export function TrainingLog({ today }: Props) {
     // Clearing the last set of an untouched session must not conjure a row
     // to store nothing in — no sets and no row yet means nothing happened.
     if (done.length === 0 && !inProgress?.id && !startPromiseRef.current) return;
-    await updateWorkout(await ensureWorkoutId(), done);
+    // Stamping the write is what starts the session clock: the first set
+    // becomes startedAt, every set moves lastSetAt.
+    await updateWorkout(await ensureWorkoutId(), done, done.length > 0 ? Date.now() : undefined);
   }
 
   function updateDraft(name: string, sets: (WorkoutSet | null)[]) {
@@ -117,7 +136,7 @@ export function TrainingLog({ today }: Props) {
     });
   }
 
-  async function finish() {
+  async function closeOut(endedAt?: number) {
     setFinishing(true);
     try {
       // Nothing logged means there is no session to finish: no row was ever
@@ -125,11 +144,20 @@ export function TrainingLog({ today }: Props) {
       // finishTrainingSession applies the same rule to a row that exists but
       // is empty, so both routes leave the pointer alone.
       const id = inProgress?.id ?? (await startPromiseRef.current) ?? null;
-      if (id !== null) await finishTrainingSession(id, today);
+      if (id !== null) await finishTrainingSession(id, today, endedAt);
       nav.pop();
     } finally {
       setFinishing(false);
+      setStalePrompt(null);
     }
+  }
+
+  function finish() {
+    // A finish tapped long after the last set is almost always a finish
+    // that was forgotten, not a set that took an hour. Ask rather than
+    // record a duration that never happened.
+    if (isStale(inProgress?.lastSetAt, Date.now())) setStalePrompt('finish');
+    else void closeOut();
   }
 
   async function togglePause(reason?: string) {
@@ -180,7 +208,49 @@ export function TrainingLog({ today }: Props) {
       />
 
       {!paused && activeSession !== 'rest' && inProgress && (
-        <p className="annot -mt-3 text-[var(--success)]">✓ every set saves as you log it</p>
+        <div className="-mt-3 flex items-baseline justify-between gap-3">
+          <p className="annot text-[var(--success)]">✓ every set saves as you log it</p>
+          {inProgress.startedAt !== undefined && (
+            <SessionClock startedAt={inProgress.startedAt} />
+          )}
+        </div>
+      )}
+
+      {/* Late finish, or walking back in hours later. Ending at the last set
+          is the default because it's the one that's almost always true. */}
+      {stalePrompt && inProgress?.lastSetAt !== undefined && (
+        <SketchCard filter="rough2" className="px-4 py-3">
+          <p className="text-[14px] leading-snug">
+            {stalePrompt === 'resume'
+              ? 'This session has been open since your last set at '
+              : 'Your last set was at '}
+            <span className="tnum font-semibold">{formatClock(inProgress.lastSetAt)}</span>.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button
+              className="flex-1 text-[14px]"
+              disabled={finishing}
+              onClick={() => closeOut(inProgress.lastSetAt)}
+            >
+              End at {formatClock(inProgress.lastSetAt)}
+            </Button>
+            <Button
+              variant="secondary"
+              className="flex-1 text-[14px]"
+              disabled={finishing}
+              onClick={() => {
+                if (stalePrompt === 'finish') void closeOut();
+                else {
+                  // Still training. Don't ask again this visit.
+                  setStalePrompt(null);
+                  setStaleAcknowledged(true);
+                }
+              }}
+            >
+              {stalePrompt === 'finish' ? 'Finish now' : 'Keep going'}
+            </Button>
+          </div>
+        </SketchCard>
       )}
 
       {!paused && (
@@ -302,6 +372,33 @@ export function TrainingLog({ today }: Props) {
 
       <RestBar restTimer={restTimer} />
     </div>
+  );
+}
+
+/**
+ * Elapsed since the first set. Deliberately quiet — muted, small, tucked
+ * against the save note. It's there so you know how long you've been in the
+ * gym, not to hurry you: nothing here turns a colour or comments on the
+ * number, however large or small it gets.
+ *
+ * Reads the wall clock every second rather than accumulating ticks, so
+ * backgrounding the app between sets can't drift it.
+ */
+function SessionClock({ startedAt }: { startedAt: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => tick((n) => n + 1), 1000);
+    const onWake = () => tick((n) => n + 1);
+    document.addEventListener('visibilitychange', onWake);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onWake);
+    };
+  }, []);
+  return (
+    <span className="tnum shrink-0 text-[13px] font-medium text-[var(--ink-muted)]">
+      {formatElapsed(Date.now() - startedAt)}
+    </span>
   );
 }
 

@@ -10,6 +10,7 @@ import {
   getTrainingState,
   getWeightPlan,
 } from '../db/config';
+import { bucketFor, durationOf, formatClock, formatDuration } from './sessionTime';
 import { formatHours } from './today';
 import { passRestDays, sessionFor } from './training';
 import { addDays, formatDayLabel, toISODate } from './time';
@@ -111,7 +112,14 @@ export async function buildAnalysisMarkdown(
     lines.push('_No sessions logged in this range._', '');
   } else {
     for (const w of sessions) {
-      lines.push(`### ${formatDayLabel(w.date)} — ${w.sessionType}`, '');
+      const duration = durationOf(w);
+      const when =
+        w.startedAt === undefined
+          ? ''
+          : ` · ${bucketFor(w.startedAt)}, ${formatClock(w.startedAt)}${
+              duration === null ? '' : `, ${formatDuration(duration)}`
+            }`;
+      lines.push(`### ${formatDayLabel(w.date)} — ${w.sessionType}${when}`, '');
       if (w.exercises.length === 0) {
         lines.push('_No sets logged._', '');
         continue;
