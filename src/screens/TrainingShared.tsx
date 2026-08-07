@@ -300,6 +300,8 @@ interface ExerciseCardProps {
   def: ExerciseDef;
   last: LastExercise | undefined;
   sets: Draft;
+  /** Brought to the top because it got no sets last time. */
+  promoted?: boolean;
   onChange: (sets: Draft) => void;
   onSetLogged?: (def: ExerciseDef) => void;
   /** Rename / reorder / remove / edit rest. */
@@ -312,7 +314,15 @@ interface ExerciseCardProps {
   };
 }
 
-export function ExerciseCard({ def, last, sets, onChange, onSetLogged, manage }: ExerciseCardProps) {
+export function ExerciseCard({
+  def,
+  last,
+  sets,
+  promoted = false,
+  onChange,
+  onSetLogged,
+  manage,
+}: ExerciseCardProps) {
   const hint = overloadHint(last, def);
   const [hintDismissed, setHintDismissed] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
@@ -350,6 +360,11 @@ export function ExerciseCard({ def, last, sets, onChange, onSetLogged, manage }:
         <div>
           <span className="hand text-[26px]">{def.name}</span>
           <p className="caption">{repRangeLabel(def)}</p>
+          {/* Plain statement of where it came from. Not "missed", not
+              "owed" — nothing was lost by not doing it last time. Caption
+              styling rather than the uppercase annotation: this is an aside,
+              and it should read like one. */}
+          {promoted && <p className="caption mt-0.5">moved up from last session</p>}
         </div>
         {manage && (
           <button

@@ -6,9 +6,11 @@ import { SketchBorder, SketchCard } from '../components/Sketch';
 import {
   finishTrainingSession,
   getExercisePlans,
+  getOrderOverrides,
   getTodaysInProgressWorkout,
   getTrainingState,
   saveExercisePlans,
+  saveOrderOverride,
   saveTrainingState,
   skipRestDay,
   startTrainingSession,
@@ -17,6 +19,7 @@ import {
   type ExerciseDef,
 } from '../db/config';
 import { db, type WorkoutExercise, type WorkoutSet } from '../db/schema';
+import { lastCompletedOf, orderForSession } from '../domain/exerciseOrder';
 import { formatClock, formatElapsed, isStale } from '../domain/sessionTime';
 import { lastTimeFor, passRestDays, sessionFor } from '../domain/training';
 import { formatDayLabel } from '../domain/time';
@@ -56,10 +59,11 @@ export function TrainingLog({ today }: Props) {
   const startPromiseRef = useRef<Promise<number> | null>(null);
 
   const data = useLiveQuery(async () => {
-    const [rawState, plans, workouts] = await Promise.all([
+    const [rawState, plans, workouts, orderOverrides] = await Promise.all([
       getTrainingState(),
       getExercisePlans(),
       db.workouts.toArray(),
+      getOrderOverrides(),
     ]);
     const state = passRestDays(rawState, today);
     const session = sessionFor(state, today);
@@ -67,7 +71,7 @@ export function TrainingLog({ today }: Props) {
     // Home's problem (finish/discard banner), never silently resumed here —
     // that would block today's session from starting fresh.
     const inProgress = await getTodaysInProgressWorkout(today);
-    return { state, plans, workouts, session, inProgress };
+    return { state, plans, workouts, session, inProgress, orderOverrides };
   }, [today]);
 
   const [draft, setDraft] = useState<Draft>({});
@@ -94,13 +98,23 @@ export function TrainingLog({ today }: Props) {
   }
 
   if (!data) return null;
-  const { state, plans, workouts, session, inProgress } = data;
+  const { state, plans, workouts, session, inProgress, orderOverrides } = data;
   const paused = Boolean(state.pause);
   // The session actually being trained is whichever row is already open
   // today, if any — its own type, not necessarily today's freshly computed
   // slot, so resuming after a reload always lands back on the right one.
   const activeSession = inProgress?.sessionType ?? session;
-  const exercises = plans[activeSession] ?? [];
+  // `plan` is the stored default order; `order` is what's rendered, with
+  // anything skipped last time brought to the front. They are kept apart on
+  // purpose: renaming or removing an exercise must write the plan back in
+  // its own order, or the promotion would quietly become the new default.
+  const plan = plans[activeSession] ?? [];
+  const lastSession = lastCompletedOf(workouts, activeSession);
+  const { order, promoted } = orderForSession(
+    plan,
+    lastSession,
+    orderOverrides[activeSession],
+  );
   const last = lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
 
   /** The row for this session, created on demand. Opening the screen must
@@ -181,6 +195,22 @@ export function TrainingLog({ today }: Props) {
 
   function setExercises(next: ExerciseDef[]) {
     void saveExercisePlans({ ...plans, [activeSession]: next });
+  }
+
+  /**
+   * Move an exercise within the visible order and make that the new stored
+   * default, per "a manual reorder becomes the new default for that session
+   * type". Also records that this session's promotion has been overruled —
+   * without it the derived order would put the exercise straight back and
+   * the move would look like it did nothing.
+   */
+  function reorder(from: number, to: number) {
+    const next = [...order];
+    [next[from], next[to]] = [next[to] as ExerciseDef, next[from] as ExerciseDef];
+    setExercises(next);
+    if (lastSession?.id !== undefined) {
+      void saveOrderOverride(activeSession, lastSession.id);
+    }
   }
 
   const slotTypes = [...new Set(state.split)];
@@ -322,19 +352,22 @@ export function TrainingLog({ today }: Props) {
 
       {!paused && activeSession !== 'rest' && (
         <>
-          {exercises.map((def, i) => (
+          {order.map((def, i) => (
             <ExerciseCard
               key={def.name}
               def={def}
               last={last.get(def.name)}
+              promoted={promoted.has(def.name)}
               sets={draft[def.name] ?? Array(def.sets ?? 4).fill(null)}
               onChange={(sets) => updateDraft(def.name, sets)}
               onSetLogged={(d) => restTimer.start(d.name, d.restSec)}
               manage={{
+                // Rename / remove / rest all edit the STORED plan, matched
+                // by name, so they leave its order alone. Writing the
+                // displayed order back here would silently make a one-off
+                // promotion the permanent default.
                 onRename: (name) => {
-                  const next = [...exercises];
-                  next[i] = { ...def, name };
-                  setExercises(next);
+                  setExercises(plan.map((e) => (e.name === def.name ? { ...e, name } : e)));
                   setDraft((d) => {
                     const { [def.name]: sets, ...rest } = d;
                     const nextDraft = sets ? { ...rest, [name]: sets } : d;
@@ -342,27 +375,22 @@ export function TrainingLog({ today }: Props) {
                     return nextDraft;
                   });
                 },
-                onMoveUp: i > 0 ? () => {
-                  const next = [...exercises];
-                  [next[i - 1], next[i]] = [next[i] as ExerciseDef, next[i - 1] as ExerciseDef];
-                  setExercises(next);
-                } : undefined,
-                onMoveDown: i < exercises.length - 1 ? () => {
-                  const next = [...exercises];
-                  [next[i], next[i + 1]] = [next[i + 1] as ExerciseDef, next[i] as ExerciseDef];
-                  setExercises(next);
-                } : undefined,
-                onRemove: () => setExercises(exercises.filter((_, j) => j !== i)),
+                onRemove: () => setExercises(plan.filter((e) => e.name !== def.name)),
                 onEditRest: (restSec) => {
-                  const next = [...exercises];
-                  next[i] = { ...def, restSec };
-                  setExercises(next);
+                  setExercises(
+                    plan.map((e) => (e.name === def.name ? { ...e, restSec } : e)),
+                  );
                 },
+                // Moving, by contrast, is a deliberate statement about
+                // order — so it saves what's on screen and overrules the
+                // promotion, which would otherwise re-hoist on next render.
+                onMoveUp: i > 0 ? () => reorder(i, i - 1) : undefined,
+                onMoveDown: i < order.length - 1 ? () => reorder(i, i + 1) : undefined,
               }}
             />
           ))}
 
-          <AddExercisePanel onAdd={(def) => setExercises([...exercises, def])} />
+          <AddExercisePanel onAdd={(def) => setExercises([...plan, def])} />
 
           <Button onClick={finish} disabled={finishing} className="mt-1">
             {finishing ? 'Saving…' : 'Finish session'}
