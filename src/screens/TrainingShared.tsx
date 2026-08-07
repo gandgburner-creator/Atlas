@@ -1,11 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { playAlarm, resumeAudio, unlockAudio, vibrate } from '../alarm';
 import { Button } from '../components/Button';
 import { NumberField, parseNum } from '../components/Chrome';
 import { TimerRing } from '../components/Ring';
 import { SketchBorder, SketchCard } from '../components/Sketch';
-import type { ExerciseDef } from '../db/config';
+import {
+  DEFAULT_ALARM_SETTINGS,
+  getAlarmSettings,
+  saveAlarmSettings,
+  type AlarmSettings,
+  type ExerciseDef,
+} from '../db/config';
 import type { WorkoutSet } from '../db/schema';
+import {
+  adjustRest,
+  formatRest,
+  parseStoredTimer,
+  restDone,
+  restFraction,
+  restRemaining,
+  type RestTimerState,
+} from '../domain/rest';
 import { formatDayLabel } from '../domain/time';
+import {
+  cancelRestNotification,
+  notifyPermission,
+  requestNotifyPermission,
+  scheduleRestNotification,
+  showRestNotificationNow,
+} from '../notify';
 import { overloadHint, type LastExercise } from '../domain/training';
 
 /**
@@ -16,96 +40,169 @@ import { overloadHint, type LastExercise } from '../domain/training';
 
 // ── Rest timer ────────────────────────────────────────────────────────────
 
-interface RestTimerState {
-  exercise: string;
-  endsAt: number;
-  total: number;
-}
-
 const REST_KEY = 'atlas.restTimer';
 
 function loadRestTimer(): RestTimerState | null {
   try {
-    const raw = localStorage.getItem(REST_KEY);
-    if (!raw) return null;
-    const t = JSON.parse(raw) as RestTimerState;
-    return t.endsAt > Date.now() - 1000 ? t : null;
+    return parseStoredTimer(localStorage.getItem(REST_KEY), Date.now());
   } catch {
-    return null;
+    return null; // Private mode with localStorage disabled.
   }
 }
 
 /**
  * Counts down from an exercise's default rest, auto-started the moment a set
- * is confirmed — no tap to start it, hands are busy. The deadline lives in
- * localStorage keyed to wall-clock time, so backgrounding the app or locking
- * the screen between sets loses nothing: on the next tick the remaining time
- * recomputes from `Date.now()`, not from an interval that could have been
- * suspended.
+ * is confirmed — no tap to start it, hands are busy.
+ *
+ * NOTHING here counts elapsed time. The deadline is stored as an absolute
+ * timestamp in localStorage and every reading is `endsAt - Date.now()`, so
+ * the interval below is only a repaint trigger: if iOS throttles it to once
+ * a minute, or stops it entirely while backgrounded, the number shown on
+ * return is still correct because it was never derived from how often the
+ * interval ran. visibilitychange, pageshow and focus each force a fresh read
+ * for the same reason — whichever one the platform actually delivers, the
+ * bar is right the instant it's back on screen.
+ *
+ * On completion every channel fires at once, because each one fails
+ * somewhere: sound is lost to headphones, vibration doesn't exist on iOS
+ * Safari, and only the notification survives a locked screen.
  */
 export function useRestTimer() {
   const [timer, setTimer] = useState<RestTimerState | null>(loadRestTimer);
-  const [now, setNow] = useState(Date.now());
-  const firedRef = useRef(false);
+  const [, forceTick] = useState(0);
+  const firedForRef = useRef<number | null>(null);
+  const stopAlarmRef = useRef<(() => void) | null>(null);
+  const [settings, setSettings] = useState<AlarmSettings>(DEFAULT_ALARM_SETTINGS);
+  const [askToNotify, setAskToNotify] = useState(false);
 
-  const start = useCallback((exercise: string, seconds: number) => {
-    const t: RestTimerState = { exercise, endsAt: Date.now() + seconds * 1000, total: seconds };
-    localStorage.setItem(REST_KEY, JSON.stringify(t));
-    firedRef.current = false;
-    setTimer(t);
-    if ('Notification' in window && Notification.permission === 'default') {
-      void Notification.requestPermission();
-    }
+  const live = useLiveQuery(getAlarmSettings, []);
+  useEffect(() => {
+    if (live) setSettings(live);
+  }, [live]);
+
+  // Unlock audio on the first tap anywhere in the session. iOS refuses to
+  // play anything that wasn't authorised by a gesture, and the moment the
+  // alarm needs to sound there is no gesture to hang it on — so it is done
+  // here, minutes ahead, on a tap the user was making anyway.
+  useEffect(() => {
+    const onFirstTap = () => unlockAudio();
+    document.addEventListener('pointerdown', onFirstTap, { once: true });
+    return () => document.removeEventListener('pointerdown', onFirstTap);
   }, []);
 
-  const dismiss = useCallback(() => {
+  const start = useCallback(
+    (exercise: string, seconds: number) => {
+      const t: RestTimerState = {
+        exercise,
+        endsAt: Date.now() + seconds * 1000,
+        total: seconds,
+      };
+      localStorage.setItem(REST_KEY, JSON.stringify(t));
+      firedForRef.current = null;
+      setTimer(t);
+      // Already unlocked by the tap that logged the set; this just brings
+      // the context back if the app has been backgrounded since.
+      resumeAudio();
+
+      if (settings.notifications) {
+        const permission = notifyPermission();
+        // Hand the alarm to the worker NOW — by the time rest is up the app
+        // is likely backgrounded and unable to do anything itself.
+        if (permission === 'granted') void scheduleRestNotification(exercise, t.endsAt);
+        // First rest of all: explain before the system prompt appears.
+        else if (permission === 'default' && !settings.askedToNotify) setAskToNotify(true);
+      }
+    },
+    [settings.notifications, settings.askedToNotify],
+  );
+
+  const clear = useCallback(() => {
+    stopAlarmRef.current?.();
+    stopAlarmRef.current = null;
     localStorage.removeItem(REST_KEY);
+    void cancelRestNotification();
     setTimer(null);
   }, []);
-
-  const skip = dismiss;
 
   const adjust = useCallback((deltaSec: number) => {
     setTimer((t) => {
       if (!t) return t;
-      const next: RestTimerState = {
-        ...t,
-        endsAt: Math.max(Date.now(), t.endsAt + deltaSec * 1000),
-        total: Math.max(1, t.total + deltaSec),
-      };
+      const next = adjustRest(t, deltaSec, Date.now());
       localStorage.setItem(REST_KEY, JSON.stringify(next));
+      // The pending notification is now aimed at the wrong moment.
+      void cancelRestNotification().then(() =>
+        scheduleRestNotification(next.exercise, next.endsAt),
+      );
       return next;
     });
   }, []);
 
+  // Repaint only. Correctness comes from Date.now(), never from this.
   useEffect(() => {
     if (!timer) return;
-    const id = window.setInterval(() => setNow(Date.now()), 250);
-    const onVis = () => setNow(Date.now());
-    document.addEventListener('visibilitychange', onVis);
+    const tick = () => forceTick((n) => n + 1);
+    const id = window.setInterval(tick, 250);
+    const onWake = () => {
+      resumeAudio();
+      tick();
+    };
+    document.addEventListener('visibilitychange', onWake);
+    window.addEventListener('pageshow', onWake);
+    window.addEventListener('focus', onWake);
     return () => {
       window.clearInterval(id);
-      document.removeEventListener('visibilitychange', onVis);
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('pageshow', onWake);
+      window.removeEventListener('focus', onWake);
     };
   }, [timer]);
 
-  const remaining = timer ? Math.max(0, timer.endsAt - now) : 0;
-  const done = Boolean(timer) && remaining <= 0;
+  // Recomputed on every render straight from the wall clock — never from
+  // how many times the interval above managed to run.
+  const now = Date.now();
+  const remaining = restRemaining(timer, now);
+  const done = restDone(timer, now);
 
+  // Fire once per timer, keyed on the deadline so adjusting the clock
+  // re-arms it and a re-render never double-fires.
   useEffect(() => {
-    if (!timer || remaining > 0 || firedRef.current) return;
-    firedRef.current = true;
-    navigator.vibrate?.([200, 100, 200]);
-    if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        new Notification('Rest over', { body: `${timer.exercise} — next set.` });
-      } catch {
-        /* iOS: constructor unsupported — vibration and the ring suffice. */
-      }
-    }
-  }, [remaining, timer]);
+    if (!timer || !done || firedForRef.current === timer.endsAt) return;
+    firedForRef.current = timer.endsAt;
 
-  return { timer, remaining, done, start, adjust, skip, dismiss };
+    if (settings.sound) stopAlarmRef.current = playAlarm(settings.tone);
+    if (settings.vibration) vibrate();
+    // The worker's scheduled copy may have been killed before it fired.
+    // Same tag, so if it did fire this replaces it rather than buzzing twice.
+    if (settings.notifications) void showRestNotificationNow(timer.exercise);
+  }, [done, timer, settings]);
+
+  const dismissAsk = useCallback(
+    async (allow: boolean) => {
+      setAskToNotify(false);
+      const next = { ...settings, askedToNotify: true };
+      await saveAlarmSettings(next);
+      setSettings(next);
+      if (!allow) return;
+      const permission = await requestNotifyPermission();
+      if (permission === 'granted') {
+        const t = loadRestTimer();
+        if (t && t.endsAt > Date.now()) void scheduleRestNotification(t.exercise, t.endsAt);
+      }
+    },
+    [settings],
+  );
+
+  return {
+    timer,
+    remaining,
+    done,
+    start,
+    adjust,
+    skip: clear,
+    dismiss: clear,
+    askToNotify,
+    dismissAsk,
+  };
 }
 
 /** Fixed to the viewport bottom, and ONLY rendered while a timer is running
@@ -115,24 +212,49 @@ export function RestBar({
 }: {
   restTimer: ReturnType<typeof useRestTimer>;
 }) {
-  const { timer, remaining, done, adjust, skip, dismiss } = restTimer;
+  const { timer, remaining, done, adjust, skip, dismiss, askToNotify, dismissAsk } = restTimer;
   if (!timer) return null;
 
-  const mm = Math.floor(remaining / 60000);
-  const ss = Math.floor((remaining % 60000) / 1000);
-  const frac = remaining / (timer.total * 1000);
+  const frac = restFraction(timer, Date.now());
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-10 mx-auto max-w-[390px] px-5">
       <div className="pb-safe bg-[var(--board)] pt-2">
-        <SketchCard className="flex items-center gap-3 px-4 py-3">
+        {/* One line, in our own words, before the system prompt — which can
+            only ever be shown once, and is unrecoverable if declined. */}
+        {askToNotify && (
+          <SketchCard filter="rough2" className="mb-2 px-4 py-3">
+            <p className="text-[14px] leading-snug">
+              Get a notification when rest is over, even with the screen locked?
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                variant="secondary"
+                className="flex-1 text-[14px]"
+                onClick={() => dismissAsk(false)}
+              >
+                Not now
+              </Button>
+              <Button className="flex-1 text-[14px]" onClick={() => dismissAsk(true)}>
+                Allow
+              </Button>
+            </div>
+          </SketchCard>
+        )}
+        <SketchCard
+          className={`flex items-center gap-3 px-4 py-3 ${done ? 'rest-flash' : ''}`}
+          stroke={done ? 'var(--success)' : 'var(--ink)'}
+        >
           <TimerRing fraction={done ? 1 : frac} color={done ? 'var(--success)' : 'var(--accent)'} size={64}>
-            <span className="tnum text-[15px] font-semibold">
-              {done ? '0:00' : `${mm}:${String(ss).padStart(2, '0')}`}
-            </span>
+            <span className="tnum text-[15px] font-semibold">{formatRest(remaining)}</span>
           </TimerRing>
           <div className="min-w-0 flex-1">
-            <p className="hand truncate text-[20px]">{done ? 'next set' : 'rest'}</p>
+            <p
+              className="hand truncate text-[20px]"
+              style={done ? { color: 'var(--success)' } : undefined}
+            >
+              {done ? 'next set' : 'rest'}
+            </p>
             <p className="truncate text-[13px] font-medium text-[var(--ink-muted)]">{timer.exercise}</p>
           </div>
           {!done && (

@@ -1,11 +1,18 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { allSleepLogs } from '../db/sleep';
 import { Button } from '../components/Button';
 import { DashedRule, SketchBorder, SketchCard } from '../components/Sketch';
 import { getWeightPlan } from '../db/config';
-import { db } from '../db/schema';
+import { db, type Workout } from '../db/schema';
 import type { ModuleFlags } from '../domain/commitments';
+import {
+  bucketStats,
+  comparableBuckets,
+  comparableExercises,
+  formatDuration,
+  MIN_SESSIONS_TO_COMPARE,
+} from '../domain/sessionTime';
 import {
   isRampComplete,
   isWeekRepeated,
@@ -50,18 +57,21 @@ export function Progress({ ramp, today, moduleFlags }: Props) {
 
   const weekStart = weekStartOf(today);
   const other = useLiveQuery(async () => {
-    const [weights, plan, workouts, letter] = await Promise.all([
+    const [weights, plan, workouts, letter, allWorkouts] = await Promise.all([
       db.weightLogs.toArray(),
       getWeightPlan(),
       db.workouts.where('date').aboveOrEqual(weekStart).toArray(),
       db.letters.get(weekStart),
+      // The time-of-day comparison needs the whole history, not this week —
+      // three sessions per bucket takes a while to accumulate.
+      db.workouts.toArray(),
     ]);
     const t0 = fromISODate(weekStart).getTime();
     const sessions = await db.focusSessions
       .where('start')
       .aboveOrEqual(t0)
       .toArray();
-    return { weights, plan, workouts, letter, sessions };
+    return { weights, plan, workouts, letter, sessions, allWorkouts };
   }, [weekStart]);
 
   if (!logs) return null;
@@ -193,10 +203,131 @@ export function Progress({ ramp, today, moduleFlags }: Props) {
         <WeightChart series={weightSeries} plan={other.plan} today={today} />
       )}
 
+      <TimeOfDayCard workouts={other?.allWorkouts ?? []} />
+
       {/* ── The letter — handwriting for heading and signature only ────── */}
       {moduleFlags.letter && (
         <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
       )}
+    </div>
+  );
+}
+
+/**
+ * Training by time of day.
+ *
+ * The point of the whole timing feature: whether particular lifts actually
+ * go better at particular hours, or whether it just feels that way. Which
+ * means it has to earn the right to say anything — nothing appears until at
+ * least two buckets carry three sessions each, because a single morning
+ * session next to a dozen evening ones is a coincidence with a table around
+ * it.
+ *
+ * It reports and stops. No bucket is called better, no session is called
+ * short, and there is no target anywhere on this card.
+ */
+function TimeOfDayCard({ workouts }: { workouts: Workout[] }) {
+  const stats = bucketStats(workouts);
+  const shown = comparableBuckets(stats);
+  const lifts = comparableExercises(shown);
+
+  if (shown.length === 0) {
+    const counts = stats.filter((s) => s.sessions > 0);
+    return (
+      <SketchCard filter="rough2" className="px-5 py-4">
+        <span className="hand text-[26px]">time of day</span>
+        <p className="caption mt-1">
+          {counts.length === 0
+            ? 'Once sessions carry a start time, this compares how training goes at different hours.'
+            : `Needs ${MIN_SESSIONS_TO_COMPARE} sessions in each of two time slots before it's worth comparing. So far: ${counts
+                .map((s) => `${s.bucket} ${s.sessions}`)
+                .join(' · ')}.`}
+        </p>
+      </SketchCard>
+    );
+  }
+
+  const cols = `repeat(${shown.length}, minmax(0, 1fr))`;
+
+  return (
+    <SketchCard className="px-4 pt-4 pb-4">
+      <span className="hand text-[26px]">time of day</span>
+      <p className="caption mt-0.5">
+        Volume is sets × reps × weight. Descriptive only — no slot is the
+        right one to train in.
+      </p>
+
+      <div className="mt-3 grid gap-x-3 gap-y-1" style={{ gridTemplateColumns: cols }}>
+        {shown.map((s) => (
+          <span key={s.bucket} className="hand text-[21px]">
+            {s.bucket}
+          </span>
+        ))}
+        {shown.map((s) => (
+          <span key={s.bucket} className="annot">
+            {s.sessions} {s.sessions === 1 ? 'session' : 'sessions'}
+          </span>
+        ))}
+      </div>
+
+      <DashedRule className="mt-3 pt-2" />
+      <Row label="average length" cols={cols}>
+        {shown.map((s) => (
+          <span key={s.bucket} className="tnum text-[17px] font-semibold">
+            {formatDuration(s.avgDurationMs)}
+          </span>
+        ))}
+      </Row>
+      <Row label="average volume" cols={cols}>
+        {shown.map((s) => (
+          <span key={s.bucket} className="tnum text-[17px] font-semibold">
+            {Math.round(s.avgVolume).toLocaleString()}
+          </span>
+        ))}
+      </Row>
+
+      {lifts.length > 0 && (
+        <>
+          <DashedRule className="mt-3 pt-2" />
+          <span className="annot">average volume per lift</span>
+          {lifts.map((name) => (
+            <Row key={name} label={name} cols={cols}>
+              {shown.map((s) => {
+                const e = s.perExercise.find((x) => x.name === name);
+                return (
+                  <span key={s.bucket} className="tnum text-[15px] font-semibold">
+                    {e ? Math.round(e.avgVolume).toLocaleString() : '—'}
+                  </span>
+                );
+              })}
+            </Row>
+          ))}
+          <p className="caption mt-2">
+            Only lifts done in every slot shown appear here. Bodyweight work
+            is left out — its volume is zero by this measure whatever the
+            hour.
+          </p>
+        </>
+      )}
+    </SketchCard>
+  );
+}
+
+function Row({
+  label,
+  cols,
+  children,
+}: {
+  label: string;
+  cols: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-2">
+      <span className="caption">{label}</span>
+      <div className="grid gap-x-3" style={{ gridTemplateColumns: cols }}>
+        {children}
+      </div>
     </div>
   );
 }

@@ -3,10 +3,109 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
-import { deleteWorkout, updateWorkout } from '../db/config';
-import { db, type WorkoutExercise, type WorkoutSet } from '../db/schema';
-import { formatDayLabel } from '../domain/time';
+import { TimeField } from '../components/TimeField';
+import { deleteWorkout, retimeWorkout, updateWorkout } from '../db/config';
+import { db, type Workout, type WorkoutExercise, type WorkoutSet } from '../db/schema';
+import {
+  bucketFor,
+  durationOf,
+  formatClock,
+  formatDuration,
+} from '../domain/sessionTime';
+import { formatDayLabel, fromISODate } from '../domain/time';
 import { useNav } from '../nav';
+
+/**
+ * When the session ran and how long it took, correctable after the fact.
+ *
+ * The times are editable because the end time is partly inferred — a
+ * forgotten finish tap is closed at the last logged set, which is the right
+ * guess but still a guess. Duration follows from the two times rather than
+ * being typed directly, so the three stored values can't contradict.
+ *
+ * Reads as a record, not a score. Nothing here remarks on the length.
+ */
+function TimingCard({ workout }: { workout: Workout }) {
+  const [editing, setEditing] = useState(false);
+  const [startV, setStartV] = useState('');
+  const [endV, setEndV] = useState('');
+
+  const duration = durationOf(workout);
+  if (workout.startedAt === undefined) {
+    return (
+      <p className="caption">
+        No timing recorded — this session predates the session clock.
+      </p>
+    );
+  }
+
+  function open() {
+    setStartV(formatClock(workout.startedAt as number));
+    setEndV(workout.endedAt === undefined ? '' : formatClock(workout.endedAt));
+    setEditing(true);
+  }
+
+  /** 'HH:MM' back onto the session's own calendar day. */
+  function onSessionDay(clock: string): number | undefined {
+    const [h, m] = clock.split(':').map(Number);
+    if (h === undefined || m === undefined || Number.isNaN(h) || Number.isNaN(m)) return undefined;
+    const d = fromISODate(workout.date);
+    d.setHours(h, m, 0, 0);
+    return d.getTime();
+  }
+
+  async function save() {
+    const startedAt = onSessionDay(startV);
+    const endedAt = onSessionDay(endV);
+    if (startedAt === undefined) return;
+    await retimeWorkout(workout.id as number, {
+      startedAt,
+      // An end before the start is a session that ran past midnight.
+      ...(endedAt === undefined
+        ? {}
+        : { endedAt: endedAt < startedAt ? endedAt + 86_400_000 : endedAt }),
+    });
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <SketchCard filter="rough2" className="px-4 py-4">
+        <span className="hand text-[22px]">session times</span>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <TimeField label="started" value={startV} onChange={setStartV} />
+          <TimeField label="ended" value={endV} onChange={setEndV} />
+        </div>
+        <div className="mt-3 flex gap-2">
+          <Button variant="secondary" className="flex-1" onClick={() => setEditing(false)}>
+            Cancel
+          </Button>
+          <Button className="flex-1" onClick={save}>
+            Save times
+          </Button>
+        </div>
+      </SketchCard>
+    );
+  }
+
+  return (
+    <SketchCard filter="rough2" className="flex items-center gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="tnum text-[17px] font-semibold">
+          {formatDuration(duration)}
+          <span className="caption ml-2 font-normal">
+            from {formatClock(workout.startedAt)}
+            {workout.endedAt !== undefined && ` to ${formatClock(workout.endedAt)}`}
+          </span>
+        </p>
+        <p className="caption">{bucketFor(workout.startedAt)} session</p>
+      </div>
+      <button onClick={open} className="hand shrink-0 px-1 text-[16px] text-[var(--ink-muted)]">
+        edit
+      </button>
+    </SketchCard>
+  );
+}
 
 /** Edit or delete a past session's logged sets. */
 export function TrainingSession({ id }: { id: number }) {
@@ -92,6 +191,8 @@ export function TrainingSession({ id }: { id: number }) {
     <div className="flex flex-col gap-4">
       <PushHeader title={workout.sessionType} />
       <p className="annot -mt-2">{formatDayLabel(workout.date)}</p>
+
+      <TimingCard workout={workout} />
 
       {exercises.length === 0 && (
         <p className="caption">No sets were logged for this session.</p>

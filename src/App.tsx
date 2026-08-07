@@ -4,6 +4,7 @@ import { Icon, type IconName } from './components/Icon';
 import { SketchDefs } from './components/Sketch';
 import {
   autoPassRestDays,
+  cleanupEmptySessions,
   getModuleFlags,
   getRamp,
   getTutorialSeen,
@@ -204,7 +205,9 @@ export default function App() {
   const today = useToday();
 
   useEffect(() => {
-    Promise.all([getRamp(), getTutorialSeen(), seedFoodDatabase()])
+    // cleanupEmptySessions runs before anything renders, so it can never
+    // race a session the user is actually in the middle of logging.
+    Promise.all([getRamp(), getTutorialSeen(), seedFoodDatabase(), cleanupEmptySessions()])
       .then(([r, seen]) => {
         setRamp(r ?? null);
         setTutorialDone(seen);

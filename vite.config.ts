@@ -25,6 +25,11 @@ export default defineConfig({
         // Everything ships in the precache. The app must open with no signal.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         navigateFallback: `${base}index.html`,
+        // Rest-timer notifications have to be scheduled from inside the
+        // worker, since the page is usually backgrounded by the time a rest
+        // is up. Pulled in rather than hand-writing the whole worker, so
+        // Workbox keeps generating the precache as before.
+        importScripts: ['sw-alarm.js'],
       },
       manifest: {
         name: 'Atlas',
