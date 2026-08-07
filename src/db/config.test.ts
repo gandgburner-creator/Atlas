@@ -418,6 +418,35 @@ describe('training state: serialized writes', () => {
     expect(w?.startedAt).toBe(start); // untouched
   });
 
+  // ── Exercise order overrides ───────────────────────────────────────────
+
+  it('starts with no order overrides at all', async () => {
+    expect(await config.getOrderOverrides()).toEqual({});
+  });
+
+  it('records an override per session type without disturbing the others', async () => {
+    await config.saveOrderOverride('back', 11);
+    await config.saveOrderOverride('legs', 22);
+    expect(await config.getOrderOverrides()).toEqual({ back: 11, legs: 22 });
+  });
+
+  it('a later reorder replaces the id rather than piling up — nothing accumulates', async () => {
+    await config.saveOrderOverride('back', 11);
+    await config.saveOrderOverride('back', 33);
+    const stored = await config.getOrderOverrides();
+    expect(stored).toEqual({ back: 33 });
+    expect(Object.keys(stored)).toHaveLength(1);
+  });
+
+  it('rapid reorder taps all land, none lost to a stale read', async () => {
+    await Promise.all([
+      config.saveOrderOverride('back', 1),
+      config.saveOrderOverride('legs', 2),
+      config.saveOrderOverride('chest', 3),
+    ]);
+    expect(await config.getOrderOverrides()).toEqual({ back: 1, legs: 2, chest: 3 });
+  });
+
   // ── Rest alarm settings ────────────────────────────────────────────────
 
   it('every alarm channel is on by default, and the prompt has not been asked', async () => {

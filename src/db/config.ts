@@ -242,6 +242,45 @@ export function saveExercisePlans(p: ExercisePlans): Promise<void> {
   return set('exercisePlans', p);
 }
 
+/**
+ * Which session's skip-promotion the user has already overruled by hand,
+ * per session type.
+ *
+ * A manual reorder saves the visible order as the new plan — but the
+ * promotion is derived fresh on every render, so without this it would
+ * hoist the exercise straight back and the reorder would look broken.
+ * Recording the session it was overruled for suppresses exactly that one
+ * promotion, and the next completed session clears it by simply having a
+ * different id.
+ *
+ * Not a tally of anything. It holds one id per session type, overwritten
+ * on the next reorder, and nothing reads it but the ordering itself.
+ */
+export type OrderOverrides = Record<string, number>;
+
+export async function getOrderOverrides(): Promise<OrderOverrides> {
+  return (await get<OrderOverrides>('exerciseOrderOverrides')) ?? {};
+}
+
+export function saveOrderOverride(sessionType: string, workoutId: number): Promise<void> {
+  return orderOverrideQueue(async () => {
+    const stored = await getOrderOverrides();
+    await set('exerciseOrderOverrides', { ...stored, [sessionType]: workoutId });
+  });
+}
+
+// Reorder taps land in quick succession; chaining keeps each one instead of
+// the last read winning, same pattern as the commitment steppers.
+let orderQueue: Promise<unknown> = Promise.resolve();
+function orderOverrideQueue<T>(fn: () => Promise<T>): Promise<T> {
+  const run = orderQueue.then(fn);
+  orderQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 // ── Training: atomic, serialized mutations ─────────────────────────────────
 //
 // Every write to trainingState — auto-passing a rest day, finishing a
