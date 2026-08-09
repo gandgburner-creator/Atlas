@@ -5,13 +5,17 @@ import { PushHeader } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
 import {
   finishTrainingSession,
+  getBonusDay,
+  getBonusPicks,
   getExercisePlans,
   getOrderOverrides,
   getTodaysInProgressWorkout,
   getTrainingState,
+  saveBonusPicks,
   saveExercisePlans,
   saveOrderOverride,
   saveTrainingState,
+  setBonusDay,
   skipRestDay,
   startTrainingSession,
   switchSession,
@@ -19,11 +23,21 @@ import {
   type ExerciseDef,
 } from '../db/config';
 import { db, type WorkoutExercise, type WorkoutSet } from '../db/schema';
+import {
+  BONUS_SESSION,
+  doneInBonusSince,
+  exerciseLibrary,
+  isBonus,
+  recentlySkipped,
+  resolveDefs,
+} from '../domain/bonus';
 import { lastCompletedOf, orderForSession } from '../domain/exerciseOrder';
 import { formatClock, formatElapsed, isStale } from '../domain/sessionTime';
 import { lastTimeFor, passRestDays, sessionFor } from '../domain/training';
 import { formatDayLabel } from '../domain/time';
 import { useNav } from '../nav';
+import { draftFromExercises, shouldAdoptRow, type Draft } from './draft';
+import { BonusPicker } from './TrainingBonus';
 import {
   AddExercisePanel,
   ExerciseCard,
@@ -33,14 +47,6 @@ import {
 
 interface Props {
   today: string;
-}
-
-type Draft = Record<string, (WorkoutSet | null)[]>;
-
-function draftFromExercises(exercises: WorkoutExercise[]): Draft {
-  const d: Draft = {};
-  for (const ex of exercises) d[ex.name] = ex.sets.length ? ex.sets : [null];
-  return d;
 }
 
 export function TrainingLog({ today }: Props) {
@@ -59,19 +65,33 @@ export function TrainingLog({ today }: Props) {
   const startPromiseRef = useRef<Promise<number> | null>(null);
 
   const data = useLiveQuery(async () => {
-    const [rawState, plans, workouts, orderOverrides] = await Promise.all([
-      getTrainingState(),
-      getExercisePlans(),
-      db.workouts.toArray(),
-      getOrderOverrides(),
-    ]);
+    const [rawState, plans, workouts, orderOverrides, bonusDay, bonusPicks] =
+      await Promise.all([
+        getTrainingState(),
+        getExercisePlans(),
+        db.workouts.toArray(),
+        getOrderOverrides(),
+        getBonusDay(),
+        getBonusPicks(),
+      ]);
     const state = passRestDays(rawState, today);
     const session = sessionFor(state, today);
     // Scoped to today: a session left in_progress from an earlier day is
     // Home's problem (finish/discard banner), never silently resumed here —
     // that would block today's session from starting fresh.
     const inProgress = await getTodaysInProgressWorkout(today);
-    return { state, plans, workouts, session, inProgress, orderOverrides };
+    return {
+      state,
+      plans,
+      workouts,
+      session,
+      inProgress,
+      orderOverrides,
+      // Only ever true for today. Yesterday's bonus day means nothing, so
+      // there is nothing to expire or clean up.
+      bonusToday: bonusDay === today,
+      bonusPicks,
+    };
   }, [today]);
 
   const [draft, setDraft] = useState<Draft>({});
@@ -81,7 +101,9 @@ export function TrainingLog({ today }: Props) {
   // once per workout shown — keyed on the row's id, not the session name —
   // so mid-tap editing isn't clobbered by the live query re-running.
   if (data?.inProgress && loadedFor !== data.inProgress.id) {
-    setDraft(draftFromExercises(data.inProgress.exercises));
+    if (shouldAdoptRow(data.inProgress.id, loadedFor, startPromiseRef.current !== null)) {
+      setDraft(draftFromExercises(data.inProgress.exercises));
+    }
     setLoadedFor(data.inProgress.id ?? null);
   }
 
@@ -103,19 +125,34 @@ export function TrainingLog({ today }: Props) {
   // The session actually being trained is whichever row is already open
   // today, if any — its own type, not necessarily today's freshly computed
   // slot, so resuming after a reload always lands back on the right one.
-  const activeSession = inProgress?.sessionType ?? session;
+  // Bonus has no slot in the split, so its own marker stands in.
+  const activeSession =
+    inProgress?.sessionType ?? (data.bonusToday ? BONUS_SESSION : session);
+  const bonus = isBonus(activeSession);
+
+  const library = exerciseLibrary(plans);
+  // A bonus session has no stored plan and never gets one: it's a list
+  // assembled for today, from the picks, and it dies with the day. Writing
+  // it into exercisePlans would turn one afternoon's choice into a
+  // permanent session type.
+  const plan = bonus ? resolveDefs(data.bonusPicks, library) : plans[activeSession] ?? [];
+  const lastSession = bonus ? undefined : lastCompletedOf(workouts, activeSession);
   // `plan` is the stored default order; `order` is what's rendered, with
   // anything skipped last time brought to the front. They are kept apart on
   // purpose: renaming or removing an exercise must write the plan back in
   // its own order, or the promotion would quietly become the new default.
-  const plan = plans[activeSession] ?? [];
-  const lastSession = lastCompletedOf(workouts, activeSession);
   const { order, promoted } = orderForSession(
     plan,
     lastSession,
     orderOverrides[activeSession],
+    lastSession ? doneInBonusSince(workouts, lastSession.date) : undefined,
   );
-  const last = lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
+  // On a bonus session "last time" has to look past the session type: the
+  // point of a curl here is that it's the same curl as on back day, and
+  // showing "first time" for a lift with months of history would be wrong.
+  const last = bonus
+    ? lastTimeFor(workouts, null, inProgress ? today : undefined)
+    : lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
 
   /** The row for this session, created on demand. Opening the screen must
    * leave no trace, so this is only ever reached from a real logged set. */
@@ -159,6 +196,11 @@ export function TrainingLog({ today }: Props) {
       // is empty, so both routes leave the pointer alone.
       const id = inProgress?.id ?? (await startPromiseRef.current) ?? null;
       if (id !== null) await finishTrainingSession(id, today, endedAt);
+      // Leaving a bonus session — logged or abandoned without a set — puts
+      // the queue back on screen. finishTrainingSession clears the marker
+      // for a session that had something in it; this covers the one that
+      // never got a row at all.
+      if (bonus) await setBonusDay(null);
       nav.pop();
     } finally {
       setFinishing(false);
@@ -193,8 +235,15 @@ export function TrainingLog({ today }: Props) {
     setChangeOpen(false);
   }
 
+  /**
+   * Where an edit to the exercise list goes. A regular session writes its
+   * stored plan; a bonus session writes only today's picks, so adding a
+   * lift for one afternoon never becomes a permanent part of any session
+   * type.
+   */
   function setExercises(next: ExerciseDef[]) {
-    void saveExercisePlans({ ...plans, [activeSession]: next });
+    if (bonus) void saveBonusPicks(next.map((e) => e.name));
+    else void saveExercisePlans({ ...plans, [activeSession]: next });
   }
 
   /**
@@ -213,7 +262,9 @@ export function TrainingLog({ today }: Props) {
     }
   }
 
-  const slotTypes = [...new Set(state.split)];
+  // Bonus is offered alongside the split's own types but is not one of
+  // them — it consumes no slot and moves nothing when picked.
+  const slotTypes = [...new Set([...state.split, BONUS_SESSION])];
 
   return (
     <div className={`flex flex-col gap-5 ${restTimer.timer ? 'pb-28' : 'pb-4'}`}>
@@ -348,6 +399,15 @@ export function TrainingLog({ today }: Props) {
             Skip ahead to the next session
           </Button>
         </SketchCard>
+      )}
+
+      {!paused && bonus && (
+        <BonusPicker
+          suggestions={recentlySkipped(plans, workouts, today)}
+          library={library}
+          picked={new Set(plan.map((e) => e.name))}
+          onPick={(def) => setExercises([...plan, def])}
+        />
       )}
 
       {!paused && activeSession !== 'rest' && (

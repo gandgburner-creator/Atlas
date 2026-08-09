@@ -6,6 +6,7 @@ import {
   type CommitmentOverrides,
   type ModuleFlags,
 } from '../domain/commitments';
+import { isBonus } from '../domain/bonus';
 import {
   advanceAfterSession,
   hasLoggedSets,
@@ -419,8 +420,16 @@ export function finishTrainingSession(
       ...withTiming(workout, { endedAt }),
     });
 
-    const next = advanceAfterSession(passed, today);
+    // A bonus session sits outside the rotation: it logs like any other
+    // session but consumes no slot, so the queue is exactly where it was
+    // and whatever was next is still next. The undo record is written all
+    // the same — undo restores `priorState`, which here is simply the
+    // unchanged state, so the two paths need no special-casing downstream.
+    const next = isBonus(workout.sessionType)
+      ? passed
+      : advanceAfterSession(passed, today);
     await saveTrainingState(next);
+    if (isBonus(workout.sessionType)) await setBonusDay(null);
 
     const record: LastFinish = {
       date: workout.date,
@@ -491,7 +500,10 @@ export function overrideNextSession(sessionType: string, today: string): Promise
 async function repointFromHistory(): Promise<void> {
   const state = await getTrainingState();
   const completed = (await db.workouts.toArray()).filter(
-    (w) => w.status !== 'in_progress' && hasLoggedSets(w),
+    // Bonus sessions never moved the pointer, so they can't imply a
+    // position for it either — a bonus session as the most recent one
+    // would otherwise read as "no idea" and freeze the recomputation.
+    (w) => w.status !== 'in_progress' && hasLoggedSets(w) && !isBonus(w.sessionType),
   );
   const pointer = pointerFromHistory(state.split, completed);
   if (pointer === null) return; // Session type no longer in the split — don't guess.
@@ -512,14 +524,18 @@ async function repointFromHistory(): Promise<void> {
 export function deleteWorkout(id: number): Promise<void> {
   return queueTraining(async () => {
     const doomed = await db.workouts.get(id);
+    // Deleting a bonus session never touches the pointer: it never moved
+    // one, so there is no advance to take back.
     const wasLatest =
       doomed !== undefined &&
       hasLoggedSets(doomed) &&
+      !isBonus(doomed.sessionType) &&
       !(await db.workouts.toArray()).some(
         (w) =>
           w.id !== id &&
           w.status !== 'in_progress' &&
           hasLoggedSets(w) &&
+          !isBonus(w.sessionType) &&
           w.date.localeCompare(doomed.date) > 0,
       );
 
@@ -557,11 +573,52 @@ export function switchSession(sessionType: string, today: string): Promise<Train
       else await db.workouts.delete(open.id);
     }
 
+    // Bonus isn't in the split, so there is no pointer position that means
+    // "today is bonus" and overrideToSession would rightly do nothing. The
+    // marker below is what makes the switch stick until something logged
+    // takes over — without it the screen would snap straight back to
+    // whatever the queue says is next, and the switch would look broken.
+    await setBonusDay(isBonus(sessionType) ? today : null);
+
     const fresh = await getTrainingState();
     const next = overrideToSession(fresh, sessionType, today);
     await saveTrainingState(next);
     return next;
   });
+}
+
+/**
+ * The day a bonus session was chosen for, or undefined.
+ *
+ * A single date, overwritten and cleared — never a list, never a history.
+ * It exists only so the log screen knows what to show today, and it stops
+ * meaning anything the moment the date isn't today, so it can't accumulate
+ * or be totalled even in principle.
+ */
+export async function getBonusDay(): Promise<string | undefined> {
+  return (await get<string | null>('bonusDay')) ?? undefined;
+}
+
+export async function setBonusDay(date: string | null): Promise<void> {
+  await set('bonusDay', date);
+  // The picks belong to that day's session and nothing else. Clearing them
+  // with it is what keeps this from becoming a list that survives.
+  if (date === null) await set('bonusPicks', []);
+}
+
+/**
+ * The exercises chosen for today's bonus session, by name.
+ *
+ * Persisted so picking three and logging one doesn't lose the other two on
+ * a reload. Wiped along with the bonus day, so it never outlives the
+ * session it was made for.
+ */
+export async function getBonusPicks(): Promise<string[]> {
+  return (await get<string[]>('bonusPicks')) ?? [];
+}
+
+export function saveBonusPicks(names: string[]): Promise<void> {
+  return set('bonusPicks', names);
 }
 
 /**

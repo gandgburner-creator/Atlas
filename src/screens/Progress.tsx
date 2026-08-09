@@ -12,6 +12,7 @@ import {
   comparableExercises,
   formatDuration,
   MIN_SESSIONS_TO_COMPARE,
+  rollingVolume,
 } from '../domain/sessionTime';
 import {
   isRampComplete,
@@ -203,6 +204,8 @@ export function Progress({ ramp, today, moduleFlags }: Props) {
         <WeightChart series={weightSeries} plan={other.plan} today={today} />
       )}
 
+      <RollingVolumeCard workouts={other?.allWorkouts ?? []} today={today} />
+
       <TimeOfDayCard workouts={other?.allWorkouts ?? []} />
 
       {/* ── The letter — handwriting for heading and signature only ────── */}
@@ -210,6 +213,50 @@ export function Progress({ ramp, today, moduleFlags }: Props) {
         <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
       )}
     </div>
+  );
+}
+
+/**
+ * Load per exercise over the trailing four weeks.
+ *
+ * Every session counts the same — scheduled or bonus, the set was done. The
+ * list is descriptive: no target, no trend arrow, no comment on whether a
+ * number should be higher. It's here to answer "how much of this have I
+ * actually been doing lately", which is a question about the past.
+ */
+function RollingVolumeCard({ workouts, today }: { workouts: Workout[]; today: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lifts = rollingVolume(workouts, today);
+  if (lifts.length === 0) return null;
+
+  const shown = expanded ? lifts : lifts.slice(0, 6);
+
+  return (
+    <SketchCard className="px-4 pt-4 pb-4">
+      <span className="hand text-[26px]">last four weeks</span>
+      <p className="caption mt-0.5">
+        Volume per lift — sets × reps × weight. Bonus sessions count like any
+        other.
+      </p>
+      <div className="mt-3 flex flex-col gap-1.5">
+        {shown.map((e) => (
+          <div key={e.name} className="flex items-baseline justify-between gap-3">
+            <span className="truncate text-[14px] font-medium">{e.name}</span>
+            <span className="tnum shrink-0 text-[15px] font-semibold">
+              {Math.round(e.volume).toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+      {lifts.length > shown.length && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="hand mt-2 text-[17px] text-[var(--ink-muted)]"
+        >
+          show all {lifts.length}
+        </button>
+      )}
+    </SketchCard>
   );
 }
 

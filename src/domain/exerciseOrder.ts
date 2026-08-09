@@ -15,8 +15,10 @@ import type { Workout } from '../db/schema';
  *   · Skip it again and it simply stays at the top, because the session we
  *     read still reports it skipped. It does not climb further, and there
  *     is no count of how many times it happened.
- *   · Nothing accumulates anywhere. There is no debt, no makeup queue and
- *     no total, because there is nowhere for one to live.
+ *   · Nothing accumulates anywhere. There is no makeup queue and no total,
+ *     because there is nowhere for one to live.
+ *   · Doing the exercise in a bonus session settles it just as doing it on
+ *     the day would — see `doneSince` on orderForSession.
  *
  * A skip is not a failure and this module never treats it as one — it
  * changes what you see first, and that is the whole of it.
@@ -92,14 +94,25 @@ export interface OrderedPlan {
  * would hoist the exercise straight back and the manual reorder would
  * appear not to have worked. It suppresses one promotion, and the next
  * completed session starts the whole thing over.
+ *
+ * `doneSince` is work that has happened in the meantime — in practice,
+ * exercises logged in a bonus session since that one. Bonus work is real
+ * work: an exercise done there is not skipped any more, so it drops out of
+ * the promotion and the list reads exactly as if it had been done on the
+ * day. See doneInBonusSince in ./bonus.
  */
 export function orderForSession(
   plan: ExerciseDef[],
   lastSession: Workout | undefined,
   overriddenFor?: number,
+  doneSince?: ReadonlySet<string>,
 ): OrderedPlan {
   const overridden =
     lastSession?.id !== undefined && lastSession.id === overriddenFor;
-  const promoted = new Set(overridden ? [] : skippedIn(plan, lastSession));
+  const promoted = new Set(
+    overridden
+      ? []
+      : skippedIn(plan, lastSession).filter((name) => !doneSince?.has(name)),
+  );
   return { order: promote(plan, promoted), promoted };
 }

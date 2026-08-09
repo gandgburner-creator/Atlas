@@ -1,5 +1,6 @@
 import type { ISODate, Workout, WorkoutSet } from '../db/schema';
 import type { ExerciseDef, TrainingState } from '../db/config';
+import { BONUS_SESSION } from './bonus';
 import { addDays, daysBetween, fromISODate } from './time';
 
 /**
@@ -152,15 +153,27 @@ export interface LastExercise {
  * this is the only thing that matters, so it renders first and largest.
  * `excludeDate` skips the session currently being edited, so re-opening
  * today's own (already-saved) session doesn't show itself as "last time".
+ *
+ * Bonus sessions always count, whatever type is asked for, and passing
+ * `null` widens it to every session. A lift is the same lift wherever it
+ * was done — a curl done as bonus work is the number you want to beat on
+ * back day, and hiding it behind the session type would show "first time"
+ * for a lift with months of history.
  */
 export function lastTimeFor(
   workouts: Workout[],
-  sessionType: string,
+  sessionType: string | null,
   excludeDate?: ISODate,
 ): Map<string, LastExercise> {
   const map = new Map<string, LastExercise>();
   const sorted = [...workouts]
-    .filter((w) => w.sessionType === sessionType && w.date !== excludeDate)
+    .filter(
+      (w) =>
+        (sessionType === null ||
+          w.sessionType === sessionType ||
+          w.sessionType === BONUS_SESSION) &&
+        w.date !== excludeDate,
+    )
     .sort((a, b) => b.date.localeCompare(a.date));
   for (const w of sorted) {
     for (const ex of w.exercises) {

@@ -1,4 +1,5 @@
-import type { Workout, WorkoutExercise } from '../db/schema';
+import type { ISODate, Workout, WorkoutExercise } from '../db/schema';
+import { addDays } from './time';
 
 /**
  * When a session happened, how long it took, and how that compares across
@@ -100,6 +101,57 @@ export function formatElapsed(ms: number): string {
   const s = total % 60;
   const ss = String(s).padStart(2, '0');
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+// ── Rolling volume ────────────────────────────────────────────────────────
+
+/** Four weeks: long enough to cover every session type several times. */
+export const ROLLING_VOLUME_DAYS = 28;
+
+export interface ExerciseVolume {
+  name: string;
+  volume: number;
+  /** Sessions in the window that included it, of any type. */
+  sessions: number;
+}
+
+/**
+ * Load per exercise over the trailing four weeks, every session type
+ * included.
+ *
+ * Bonus sessions count here exactly as scheduled ones do — the set was
+ * done, the load was moved, and which heading it happened under is not a
+ * property of the barbell. Nothing is weighted or discounted by session
+ * type, and this function has no way to tell them apart on purpose.
+ *
+ * Zero-volume lifts are dropped for the same reason as everywhere else:
+ * bodyweight work scores nothing under sets × reps × weight, and a row of
+ * zeroes is noise rather than information.
+ */
+export function rollingVolume(
+  workouts: Workout[],
+  endDate: ISODate,
+  days = ROLLING_VOLUME_DAYS,
+): ExerciseVolume[] {
+  const from = addDays(endDate, -(days - 1));
+  const byExercise = new Map<string, { volume: number; sessions: number }>();
+
+  for (const w of workouts) {
+    if (w.status === 'in_progress') continue;
+    if (w.date < from || w.date > endDate) continue;
+    for (const ex of w.exercises) {
+      if (ex.sets.length === 0) continue;
+      const cur = byExercise.get(ex.name) ?? { volume: 0, sessions: 0 };
+      cur.volume += exerciseVolume(ex);
+      cur.sessions += 1;
+      byExercise.set(ex.name, cur);
+    }
+  }
+
+  return [...byExercise.entries()]
+    .map(([name, v]) => ({ name, ...v }))
+    .filter((e) => e.volume > 0)
+    .sort((a, b) => b.volume - a.volume);
 }
 
 // ── Comparison ────────────────────────────────────────────────────────────

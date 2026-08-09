@@ -11,6 +11,8 @@ import {
   formatDuration,
   formatElapsed,
   isStale,
+  rollingVolume,
+  ROLLING_VOLUME_DAYS,
   STALE_GAP_MS,
   workoutVolume,
 } from './sessionTime';
@@ -215,5 +217,62 @@ describe('bucketed comparison', () => {
     expect(evening.sessions).toBe(3);
     expect(evening.avgDurationMs).toBeNull();
     expect(formatDuration(evening.avgDurationMs)).toBe('—');
+  });
+});
+
+describe('four-week rolling volume', () => {
+  const lift = (name: string, reps: number, weight: number) => ({
+    name,
+    sets: [{ reps, weight }],
+  });
+
+  it('sums load per exercise across the window, heaviest first', () => {
+    const workouts = [
+      session({ date: '2026-08-01', exercises: [lift('Barbell row', 10, 60)] }),
+      session({ date: '2026-08-05', exercises: [lift('Barbell row', 10, 60), lift('Curl', 10, 20)] }),
+    ];
+    expect(rollingVolume(workouts, '2026-08-09')).toEqual([
+      { name: 'Barbell row', volume: 1200, sessions: 2 },
+      { name: 'Curl', volume: 200, sessions: 1 },
+    ]);
+  });
+
+  it('counts bonus sessions exactly like scheduled ones', () => {
+    const scheduled = session({ date: '2026-08-05', exercises: [lift('Curl', 10, 20)] });
+    const bonus = session({
+      date: '2026-08-06',
+      sessionType: 'bonus',
+      exercises: [lift('Curl', 10, 20)],
+    });
+    // The set was done and the load was moved. Which heading it happened
+    // under is not a property of the barbell.
+    expect(rollingVolume([scheduled, bonus], '2026-08-09')).toEqual([
+      { name: 'Curl', volume: 400, sessions: 2 },
+    ]);
+  });
+
+  it('is four weeks, and forgets what falls out the back', () => {
+    expect(ROLLING_VOLUME_DAYS).toBe(28);
+    // 28 days ending 2026-08-09 inclusive reaches back to 2026-07-13, so
+    // the 12th is the first day outside it.
+    expect(
+      rollingVolume([session({ date: '2026-07-13', exercises: [lift('Curl', 10, 20)] })], '2026-08-09'),
+    ).toHaveLength(1);
+    const older = [session({ date: '2026-07-12', exercises: [lift('Curl', 10, 20)] })];
+    expect(rollingVolume(older, '2026-08-09')).toEqual([]);
+    // Widen the window by a day and the same session counts again.
+    expect(rollingVolume(older, '2026-08-09', 29)).toHaveLength(1);
+  });
+
+  it('leaves out sessions still in progress', () => {
+    const workouts = [
+      session({ date: '2026-08-05', status: 'in_progress', exercises: [lift('Curl', 10, 20)] }),
+    ];
+    expect(rollingVolume(workouts, '2026-08-09')).toEqual([]);
+  });
+
+  it('drops bodyweight work, whose volume is zero however hard it was', () => {
+    const workouts = [session({ date: '2026-08-05', exercises: [lift('Pull-ups', 8, 0)] })];
+    expect(rollingVolume(workouts, '2026-08-09')).toEqual([]);
   });
 });

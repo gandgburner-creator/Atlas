@@ -511,4 +511,113 @@ describe('training state: serialized writes', () => {
     await config.saveExercisePlans({ ...plans, legs: customLegs });
     expect((await config.getExercisePlans()).legs).toEqual(customLegs);
   });
+
+  // ── Bonus sessions ──────────────────────────────────────────────────────
+  //
+  // A bonus session logs like any other and moves the queue like none:
+  // whatever was next before it is still next after it. Everything below
+  // is a different route to that one property.
+
+  it('finishing a bonus session leaves the pointer exactly where it was', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const id = await startWithASet(TODAY, 'bonus');
+    await config.finishTrainingSession(id, TODAY);
+
+    const state = await config.getTrainingState();
+    expect(state.pointer).toBe(0);
+    expect(SPLIT[state.pointer % SPLIT.length]).toBe('back');
+  });
+
+  it('a bonus session between two regular ones does not cost a slot', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+
+    await config.finishTrainingSession(await startWithASet('2026-08-01', 'back'), '2026-08-01');
+    await config.finishTrainingSession(await startWithASet('2026-08-02', 'bonus'), '2026-08-02');
+
+    // Back was trained, so shoulders is next — the bonus day in between
+    // changed nothing about that.
+    const state = await config.getTrainingState();
+    expect(SPLIT[state.pointer % SPLIT.length]).toBe('shoulders');
+  });
+
+  it('a bonus session is still a real, complete, timed session', async () => {
+    const id = await config.startTrainingSession(TODAY, 'bonus');
+    // Stamped, exactly as the logger stamps every set — the clock starts on
+    // a bonus session the same way it starts on any other.
+    await config.updateWorkout(
+      id,
+      [{ name: 'Barbell curl', sets: [{ reps: 10, weight: 30 }] }],
+      Date.now(),
+    );
+    await config.finishTrainingSession(id, TODAY);
+
+    const schema = await import('./schema');
+    const saved = await schema.db.workouts.get(id);
+    expect(saved?.status).toBe('complete');
+    expect(saved?.sessionType).toBe('bonus');
+    expect(saved?.startedAt).toBeGreaterThan(0);
+    expect(saved?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('deleting the most recent bonus session leaves the pointer alone', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    await config.finishTrainingSession(await startWithASet('2026-08-01', 'back'), '2026-08-01');
+
+    const bonusId = await startWithASet('2026-08-02', 'bonus');
+    await config.finishTrainingSession(bonusId, '2026-08-02');
+    const before = (await config.getTrainingState()).pointer;
+
+    await config.deleteWorkout(bonusId);
+    // It never moved the pointer, so removing it has nothing to take back.
+    expect((await config.getTrainingState()).pointer).toBe(before);
+  });
+
+  it('a bonus session cannot stand in for a regular one when the pointer is recomputed', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    const backId = await startWithASet('2026-08-01', 'back');
+    await config.finishTrainingSession(backId, '2026-08-01');
+    await config.finishTrainingSession(await startWithASet('2026-08-02', 'bonus'), '2026-08-02');
+    await config.finishTrainingSession(await startWithASet('2026-08-03', 'shoulders'), '2026-08-03');
+
+    // Delete the latest regular session. The pointer has to come back to
+    // "after back" — reading the bonus day as the latest session would
+    // leave it stranded, since bonus is in no split.
+    const shouldersId = (await (await import('./schema')).db.workouts.toArray()).find(
+      (w) => w.sessionType === 'shoulders',
+    )?.id as number;
+    await config.deleteWorkout(shouldersId);
+    expect(SPLIT[(await config.getTrainingState()).pointer % SPLIT.length]).toBe('shoulders');
+  });
+
+  it('choosing bonus from the switcher sticks, and moves nothing', async () => {
+    await config.saveTrainingState({ ...config.DEFAULT_TRAINING_STATE, split: SPLIT, pointer: 0 });
+    await config.switchSession('bonus', TODAY);
+
+    expect(await config.getBonusDay()).toBe(TODAY);
+    expect((await config.getTrainingState()).pointer).toBe(0);
+  });
+
+  it('choosing a real session type again clears the bonus day', async () => {
+    await config.switchSession('bonus', TODAY);
+    await config.switchSession('legs', TODAY);
+    expect(await config.getBonusDay()).toBeUndefined();
+  });
+
+  it('finishing the bonus session hands the screen back to the queue', async () => {
+    await config.switchSession('bonus', TODAY);
+    const id = await startWithASet(TODAY, 'bonus');
+    await config.finishTrainingSession(id, TODAY);
+    expect(await config.getBonusDay()).toBeUndefined();
+  });
+
+  it('picks are kept while the session is open and dropped with it', async () => {
+    await config.switchSession('bonus', TODAY);
+    await config.saveBonusPicks(['Barbell curl', 'Cable fly']);
+    // Survives a reload mid-session — picking three and logging one must
+    // not lose the other two.
+    expect(await config.getBonusPicks()).toEqual(['Barbell curl', 'Cable fly']);
+
+    await config.setBonusDay(null);
+    expect(await config.getBonusPicks()).toEqual([]);
+  });
 });
