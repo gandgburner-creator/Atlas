@@ -22,6 +22,7 @@ import {
   restRemaining,
   type RestTimerState,
 } from '../domain/rest';
+import { setLoadWarning } from '../domain/plausible';
 import { formatDayLabel } from '../domain/time';
 import {
   cancelRestNotification,
@@ -328,6 +329,25 @@ export function ExerciseCard({
   const [editing, setEditing] = useState<number | null>(null);
   const [managing, setManaging] = useState(false);
 
+  /**
+   * A set wildly out of line with the others already logged for this
+   * exercise today — "80, 80, 80, 8" is a slipped digit, and it silently
+   * corrupts volume and every progression read off it.
+   *
+   * Derived from what's on screen rather than latched at log time, so
+   * correcting the set makes the note go away by itself. Nothing is
+   * blocked and nothing is auto-changed: if 8 kg is what you lifted, log
+   * it and read past this.
+   */
+  const loadWarnings = sets.map((s, i) =>
+    s === null
+      ? null
+      : setLoadWarning(
+          s.weight,
+          sets.slice(0, i).filter((p): p is WorkoutSet => p !== null).map((p) => p.weight),
+        ),
+  );
+
   function prefill(i: number) {
     const from = last?.sets[Math.min(i, (last?.sets.length ?? 1) - 1)];
     const filled: WorkoutSet = from
@@ -423,7 +443,8 @@ export function ExerciseCard({
               onClear={() => clear(i)}
             />
           ) : (
-            <div key={i} className="flex items-center gap-2">
+            <div key={i} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => (s ? setEditing(i) : prefill(i))}
                 className="relative flex h-[52px] flex-1 items-center justify-between px-4"
@@ -455,6 +476,12 @@ export function ExerciseCard({
                   edit
                 </button>
               )}
+            </div>
+            {loadWarnings[i] && (
+              <p className="caption" style={{ color: 'var(--accent)' }}>
+                {loadWarnings[i]}
+              </p>
+            )}
             </div>
           ),
         )}

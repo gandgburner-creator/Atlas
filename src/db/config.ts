@@ -770,20 +770,12 @@ export function savePinnedProjection(
   return set('pinnedProjection', p);
 }
 
-/** Observed-rate cache: recomputed at most once per calendar day. */
-export interface RateCache {
-  date: string;
-  ratePerWeek: number | null;
-  windowDays: number;
-}
-
-export function getRateCache(): Promise<RateCache | undefined> {
-  return get<RateCache>('rateCache');
-}
-
-export function saveRateCache(c: RateCache): Promise<void> {
-  return set('rateCache', c);
-}
+/*
+ * The observed rate used to be cached here under 'rateCache', keyed on the
+ * calendar day. It is computed directly now — see Projection. The stored
+ * key is left where it is: a stale value nothing reads is inert, and
+ * deleting user config to tidy up is not a trade worth making.
+ */
 
 // ── Targets ───────────────────────────────────────────────────────────────
 

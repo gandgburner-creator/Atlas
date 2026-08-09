@@ -5,6 +5,9 @@ import { TimerRing } from './Ring';
 import { SketchBorder, SketchCard } from './Sketch';
 import { db } from '../db/schema';
 
+/** Below this a "session" is a mistap, not work. Discarded on finish. */
+const MIN_FOCUS_MS = 2 * 60_000;
+
 /**
  * A count-up session timer for focus and craft hours. "Start" writes the
  * session to Dexie immediately — start time, intent, tag, area — with no
@@ -64,11 +67,16 @@ export function SessionTimer({
 
   async function finish() {
     if (!running?.id || satisfaction === null || completed === null) return;
-    await db.focusSessions.update(running.id, {
-      end: Date.now(),
-      satisfaction,
-      completed,
-    });
+    const end = Date.now();
+    // A session shorter than this was started by accident — a mistap, or a
+    // start immediately thought better of. Recording eighteen seconds as
+    // focused work makes every average built on the table wrong, so the row
+    // goes rather than being kept for completeness.
+    if (end - running.start < MIN_FOCUS_MS) {
+      await db.focusSessions.delete(running.id);
+    } else {
+      await db.focusSessions.update(running.id, { end, satisfaction, completed });
+    }
     setEnding(false);
     setSatisfaction(null);
     setCompleted(null);

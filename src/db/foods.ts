@@ -55,7 +55,8 @@ export async function getRecentFoodIds(limit = 8): Promise<number[]> {
   const seen = new Set<number>();
   const order: number[] = [];
   for (const r of rows) {
-    if (seen.has(r.foodId)) continue;
+    // A quick entry references no food, so there is nothing to offer again.
+    if (r.foodId === null || seen.has(r.foodId)) continue;
     seen.add(r.foodId);
     order.push(r.foodId);
     if (order.length >= limit) break;
@@ -67,7 +68,10 @@ export async function getRecentFoodIds(limit = 8): Promise<number[]> {
 export async function getFrequentFoodIds(limit = 8): Promise<number[]> {
   const rows = await db.foodLogs.toArray();
   const counts = new Map<number, number>();
-  for (const r of rows) counts.set(r.foodId, (counts.get(r.foodId) ?? 0) + 1);
+  for (const r of rows) {
+    if (r.foodId === null) continue;
+    counts.set(r.foodId, (counts.get(r.foodId) ?? 0) + 1);
+  }
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)

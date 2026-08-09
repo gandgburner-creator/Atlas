@@ -45,11 +45,30 @@ describe('stage timeline', () => {
     expect(after[22]).toBe('2026-08-01');
   });
 
-  it('backfills stages passed through unseen', () => {
+  it('records only where you are on the very first reading', () => {
+    // Stages coarser than the current one were passed before the app
+    // existed. Stamping them all with the install date claimed five
+    // milestones were reached on the day of install, and the timeline drew
+    // it that way.
     const dates = updateStageDates({}, 20.5, '2026-08-01');
-    expect(dates[25]).toBe('2026-08-01');
     expect(dates[21]).toBe('2026-08-01');
+    expect(dates[25]).toBeUndefined();
+    expect(dates[22]).toBeUndefined();
     expect(dates[20]).toBeUndefined();
+  });
+
+  it('backfills stages passed through unseen once the history is its own', () => {
+    // Seen at 23, next reading is 20.5 — 22 and 21 really were crossed in
+    // between, so dating them to the reading that found them is honest.
+    let dates = updateStageDates({}, 22.4, '2026-08-01');
+    expect(dates[23]).toBe('2026-08-01');
+
+    dates = updateStageDates(dates, 20.5, '2026-09-01');
+    expect(dates[22]).toBe('2026-09-01');
+    expect(dates[21]).toBe('2026-09-01');
+    expect(dates[20]).toBeUndefined();
+    // The first reading's own stamp is untouched.
+    expect(dates[23]).toBe('2026-08-01');
   });
 });
 
@@ -112,5 +131,56 @@ describe('weight rolling average and trend', () => {
 describe('sleep module untouched', () => {
   it('averageClockTime still wraps midnight', () => {
     expect(averageClockTime(['23:50', '00:10'])).toBe('00:00');
+  });
+});
+
+describe('gaps in the weight log', () => {
+  it('windows the rolling average by date, not by count', () => {
+    // Reported concern: with missing days, "last 7 entries" would span 9+
+    // calendar days and quietly average across a fortnight.
+    const logs = [
+      { date: '2026-07-27', kg: 98.2 },
+      { date: '2026-07-28', kg: 98.0 },
+      { date: '2026-07-29', kg: 97.9 },
+      { date: '2026-07-30', kg: 97.8 },
+      { date: '2026-07-31', kg: 97.7 },
+      { date: '2026-08-01', kg: 97.6 },
+      { date: '2026-08-02', kg: 97.5 },
+      // 08-03 missing.
+      { date: '2026-08-04', kg: 97.3 },
+      { date: '2026-08-05', kg: 97.2 },
+      { date: '2026-08-06', kg: 97.1 },
+      // 08-07 and 08-08 missing.
+      { date: '2026-08-09', kg: 96.8 },
+    ];
+    const series = rollingAverageSeries(logs);
+    const last = series[series.length - 1]!;
+    expect(last.date).toBe('2026-08-09');
+    // 08-03 onwards is four logged days, not seven entries reaching back
+    // into July.
+    const expected = (97.3 + 97.2 + 97.1 + 96.8) / 4;
+    expect(last.avg).toBeCloseTo(expected, 10);
+  });
+
+  it('computes a rate once the logs span the shortest window', () => {
+    // The backup's own range: 11 entries, 2026-07-27 to 2026-08-09.
+    const logs = [
+      { date: '2026-07-27', kg: 98.2 }, { date: '2026-07-28', kg: 98.0 },
+      { date: '2026-07-29', kg: 97.9 }, { date: '2026-07-30', kg: 97.8 },
+      { date: '2026-07-31', kg: 97.7 }, { date: '2026-08-01', kg: 97.6 },
+      { date: '2026-08-02', kg: 97.5 }, { date: '2026-08-04', kg: 97.3 },
+      { date: '2026-08-05', kg: 97.2 }, { date: '2026-08-06', kg: 97.1 },
+      { date: '2026-08-09', kg: 96.8 },
+    ];
+    const r = observedRate(logs, '2026-08-09');
+    expect(r).not.toBeNull();
+    expect(r?.windowDays).toBe(14);
+    expect(r?.ratePerWeek).toBeGreaterThan(0);
+
+    // Four days earlier the same logs span only nine days, which is short
+    // of every window — so it returns null rather than a number built on
+    // too little. That, not a broken calculation, is what the backup's
+    // cached `ratePerWeek: null` recorded.
+    expect(observedRate(logs.filter((l) => l.date <= '2026-08-05'), '2026-08-05')).toBeNull();
   });
 });

@@ -119,7 +119,16 @@ export function updateStageDates(
 ): Record<number, string> {
   const stage = stageFor(bfPct);
   if (stage > STAGE_MAX || dates[stage]) return dates;
-  // Also backfill any coarser stage passed through without being seen.
+
+  // The very first reading records only where you actually are. Every
+  // coarser stage was passed before the app was watching, and stamping
+  // them all with the install date would claim five milestones were
+  // reached on the day of install — which is what the timeline then draws.
+  if (Object.keys(dates).length === 0) return { ...dates, [stage]: today };
+
+  // From here on the history is ours, so a jump across two stages between
+  // two readings can be filled in honestly: they really were passed since
+  // the last date on record.
   const next = { ...dates };
   for (let s = STAGE_MAX; s >= stage; s--) {
     if (!next[s]) next[s] = today;

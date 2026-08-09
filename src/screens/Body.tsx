@@ -33,7 +33,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
   const [savingKg, setSavingKg] = useState(false);
 
   const data = useLiveQuery(async () => {
-    const [weights, lean, plan, pinned, stageDates, training, todayLog, inbodyLatest] =
+    const [weights, lean, plan, pinned, stageDates, training, todayLog] =
       await Promise.all([
         db.weightLogs.toArray(),
         getLeanMassKg(),
@@ -42,9 +42,8 @@ export function BodyScreen({ today, moduleFlags }: Props) {
         getStageDates(),
         getTrainingState(),
         db.weightLogs.get(today),
-        db.inbody.orderBy('date').last(),
       ]);
-    return { weights, lean, plan, pinned, stageDates, training, todayLog, inbodyLatest };
+    return { weights, lean, plan, pinned, stageDates, training, todayLog };
   }, [today]);
 
   const avgForEffect = data ? latestRollingAvg(data.weights) : null;
@@ -82,7 +81,18 @@ export function BodyScreen({ today, moduleFlags }: Props) {
     if (!kg || kg < 30 || kg > 250) return;
     setSavingKg(true);
     try {
-      await db.weightLogs.put({ date: todayISO(), kg });
+      const date = todayISO();
+      const existing = await db.weightLogs.get(date);
+      const now = Date.now();
+      // Timestamped like every other table, so a correction is visible as a
+      // correction. `date` stays the primary key: re-weighing today edits
+      // today rather than adding a second row for it.
+      await db.weightLogs.put({
+        date,
+        kg,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
       setKgInput('');
     } finally {
       setSavingKg(false);
