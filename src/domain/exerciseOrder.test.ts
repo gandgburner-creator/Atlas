@@ -164,6 +164,26 @@ describe('the rules, end to end', () => {
     expect(held.promoted.size).toBe(0);
   });
 
+  it('an exercise done as bonus work is not skipped, so it is not promoted', () => {
+    const last = session('back', '2026-08-01', ['Pull-ups', 'Lat pulldown', 'Chest row', 'Curl']);
+    // Barbell row would lead the list. It got done in a bonus session in
+    // the meantime, so there is nothing to bring forward.
+    const { order, promoted } = orderForSession(
+      PLAN, last, undefined, new Set(['Barbell row']),
+    );
+    expect(names(order)).toEqual(names(PLAN));
+    expect(promoted.size).toBe(0);
+  });
+
+  it('bonus work settles only what it covered', () => {
+    const last = session('back', '2026-08-01', ['Pull-ups', 'Lat pulldown']);
+    const { order, promoted } = orderForSession(
+      PLAN, last, undefined, new Set(['Barbell row']),
+    );
+    expect(names(order)[0]).toBe('Chest row');
+    expect([...promoted].sort()).toEqual(['Chest row', 'Curl']);
+  });
+
   it('the override lapses at the next completed session, so later skips still promote', () => {
     const overruledFor = session('back', '2026-08-01', ['Pull-ups']).id;
     // A newer session, in which Curl was skipped.
