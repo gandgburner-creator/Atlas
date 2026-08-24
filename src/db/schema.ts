@@ -136,6 +136,9 @@ export interface FoodLog {
 export interface WorkoutSet {
   reps: number;
   weight: number;
+  /** Epoch millis the set was confirmed and locked. Absent on sets logged
+   * before the confirm step existed, and on ones still being edited. */
+  confirmedAt?: number;
 }
 
 export interface WorkoutExercise {
@@ -157,6 +160,16 @@ export interface Workout {
    * were always saved whole under the pre-autosave model.
    */
   status?: 'in_progress' | 'complete';
+
+  /** Free text for the session — how it went, what hurt, what to change. */
+  notes?: string;
+  /** 1–5, asked once at the end. Energy trend, not a score for the session:
+   * nothing reads this to judge whether the session was good enough. */
+  feelRating?: number;
+  /** 1–3 while the ramp phase is running, absent outside it. Recorded on
+   * the row so a session's percentage stays readable later even if the ramp
+   * start date is edited afterwards. */
+  rampWeek?: number;
 
   // ── Timing ──────────────────────────────────────────────────────────
   // Epoch millis, unlike `date` — a session is a real interval, and its

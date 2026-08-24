@@ -20,6 +20,7 @@ import { formatDayLabel, todayISO } from '../domain/time';
 import { passRestDays, sessionFor } from '../domain/training';
 import { latestRollingAvg, rollingAverageSeries } from '../domain/weight';
 import { useNav } from '../nav';
+import { RampPhaseCard, RampTodayCard, useLiftRampData } from './TrainingRamp';
 import { WeightChart } from './WeightChart';
 
 interface Props {
@@ -46,6 +47,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
     return { weights, lean, plan, pinned, stageDates, training, todayLog };
   }, [today]);
 
+  const rampData = useLiftRampData(today);
   const avgForEffect = data ? latestRollingAvg(data.weights) : null;
   const leanForEffect = data?.lean;
 
@@ -66,6 +68,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
 
   if (!data) return null;
   const { weights, lean, plan, pinned, stageDates, training, todayLog } = data;
+  const rampActive = Boolean(rampData?.ramp);
 
   const series = rollingAverageSeries(weights);
   const avg = latestRollingAvg(weights);
@@ -212,7 +215,15 @@ export function BodyScreen({ today, moduleFlags }: Props) {
         </SketchCard>
       )}
 
-      {/* ── Training ───────────────────────────────────────────────────── */}
+      {/* ── Ramp phase ─────────────────────────────────────────────────── */}
+      <RampPhaseCard today={today} />
+      <RampTodayCard today={today} />
+
+      {/* ── Training ─────────────────────────────────────────────────────
+          Hidden while the ramp runs: the ramp card above already names
+          today's session and opens the same log, and two cards saying the
+          same thing is worse than one. */}
+      {!rampActive && (
       <button onClick={() => nav.push({ name: 'training-log' })} className="text-left">
         <SketchCard className="px-5 pt-4 pb-5">
           <div className="flex items-center justify-between">
@@ -231,6 +242,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
           </p>
         </SketchCard>
       </button>
+      )}
 
       {/* ── InBody ─────────────────────────────────────────────────────── */}
       {moduleFlags.insight && <InBodyCard today={today} />}

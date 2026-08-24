@@ -7,12 +7,14 @@ import {
   finishTrainingSession,
   getBonusDay,
   getBonusPicks,
+  getLiftRamp,
   getExercisePlans,
   getOrderOverrides,
   getTodaysInProgressWorkout,
   getTrainingState,
   saveBonusPicks,
   saveExercisePlans,
+  saveSessionMeta,
   saveOrderOverride,
   saveTrainingState,
   setBonusDay,
@@ -31,6 +33,13 @@ import {
   recentlySkipped,
   resolveDefs,
 } from '../domain/bonus';
+import {
+  expectedWeight,
+  isPersonalRecord,
+  percentForWeek,
+  rampWeekFor,
+  summarise,
+} from '../domain/liftRamp';
 import { lastCompletedOf, orderForSession } from '../domain/exerciseOrder';
 import { formatClock, formatElapsed, isStale } from '../domain/sessionTime';
 import { lastTimeFor, passRestDays, sessionFor } from '../domain/training';
@@ -65,7 +74,7 @@ export function TrainingLog({ today }: Props) {
   const startPromiseRef = useRef<Promise<number> | null>(null);
 
   const data = useLiveQuery(async () => {
-    const [rawState, plans, workouts, orderOverrides, bonusDay, bonusPicks] =
+    const [rawState, plans, workouts, orderOverrides, bonusDay, bonusPicks, liftRamp] =
       await Promise.all([
         getTrainingState(),
         getExercisePlans(),
@@ -73,6 +82,7 @@ export function TrainingLog({ today }: Props) {
         getOrderOverrides(),
         getBonusDay(),
         getBonusPicks(),
+        getLiftRamp(),
       ]);
     const state = passRestDays(rawState, today);
     const session = sessionFor(state, today);
@@ -91,11 +101,19 @@ export function TrainingLog({ today }: Props) {
       // there is nothing to expire or clean up.
       bonusToday: bonusDay === today,
       bonusPicks,
+      liftRamp,
     };
   }, [today]);
 
   const [draft, setDraft] = useState<Draft>({});
   const [loadedFor, setLoadedFor] = useState<number | null>(null);
+  const [notes, setNotes] = useState('');
+  // Set the moment a confirmed set beats every previous one for that lift.
+  // Deliberately not expected during the ramp — that's what 60% means.
+  const [prLift, setPrLift] = useState<string | null>(null);
+  // The end-of-session pass: rating, then the summary.
+  const [closing, setClosing] = useState(false);
+  const [feel, setFeel] = useState<number | null>(null);
 
   // Load the in-progress row's already-logged sets into the draft exactly
   // once per workout shown — keyed on the row's id, not the session name —
@@ -103,6 +121,7 @@ export function TrainingLog({ today }: Props) {
   if (data?.inProgress && loadedFor !== data.inProgress.id) {
     if (shouldAdoptRow(data.inProgress.id, loadedFor, startPromiseRef.current !== null)) {
       setDraft(draftFromExercises(data.inProgress.exercises));
+      setNotes(data.inProgress.notes ?? '');
     }
     setLoadedFor(data.inProgress.id ?? null);
   }
@@ -154,6 +173,20 @@ export function TrainingLog({ today }: Props) {
     ? lastTimeFor(workouts, null, inProgress ? today : undefined)
     : lastTimeFor(workouts, activeSession, inProgress ? today : undefined);
 
+  // ── Ramp phase ─────────────────────────────────────────────────────────
+  // Which week it is, and therefore what percentage, is derived from the
+  // start date against today — there is no counter to advance or get stuck.
+  // Bonus sessions are outside the program, so they take no percentage.
+  const hasSets = Object.values(draft).some((sets) =>
+    sets.some((x) => x !== null),
+  );
+  const rampWeek =
+    data.liftRamp && !bonus ? rampWeekFor(data.liftRamp.startDate, today) : null;
+  const planLabel =
+    rampWeek === null
+      ? undefined
+      : `week ${rampWeek} · ${Math.round(percentForWeek(rampWeek) * 100)}%`;
+
   /** The row for this session, created on demand. Opening the screen must
    * leave no trace, so this is only ever reached from a real logged set. */
   async function ensureWorkoutId(): Promise<number> {
@@ -177,6 +210,13 @@ export function TrainingLog({ today }: Props) {
     // Stamping the write is what starts the session clock: the first set
     // becomes startedAt, every set moves lastSetAt.
     await updateWorkout(await ensureWorkoutId(), done, done.length > 0 ? Date.now() : undefined);
+  }
+
+  /** Notes save on every keystroke — same rule as sets. */
+  function updateNotes(text: string) {
+    setNotes(text);
+    const id = inProgress?.id;
+    if (id !== undefined) void saveSessionMeta(id, { notes: text });
   }
 
   function updateDraft(name: string, sets: (WorkoutSet | null)[]) {
@@ -213,7 +253,22 @@ export function TrainingLog({ today }: Props) {
     // that was forgotten, not a set that took an hour. Ask rather than
     // record a duration that never happened.
     if (isStale(inProgress?.lastSetAt, Date.now())) setStalePrompt('finish');
+    // Nothing logged means there's no session to rate or summarise.
+    else if (inProgress?.id !== undefined && hasSets) setClosing(true);
     else void closeOut();
+  }
+
+  /** Store the rating (and this session's ramp week) before closing out. */
+  async function closeWithFeel(rating: number | null) {
+    const id = inProgress?.id;
+    if (id !== undefined) {
+      await saveSessionMeta(id, {
+        ...(rating !== null ? { feelRating: rating } : {}),
+        ...(rampWeek !== null ? { rampWeek } : {}),
+        notes: notes || undefined,
+      });
+    }
+    await closeOut();
   }
 
   async function togglePause(reason?: string) {
@@ -334,7 +389,7 @@ export function TrainingLog({ today }: Props) {
         </SketchCard>
       )}
 
-      {!paused && (
+      {!paused && !closing && (
         <div>
           <button
             onClick={() => setChangeOpen((v) => !v)}
@@ -384,7 +439,7 @@ export function TrainingLog({ today }: Props) {
         </SketchCard>
       )}
 
-      {!paused && activeSession === 'rest' && (
+      {!paused && !closing && activeSession === 'rest' && (
         <SketchCard className="px-5 py-5">
           <p className="hand text-[26px]">rest is on the plan</p>
           <p className="caption mt-1">
@@ -401,7 +456,45 @@ export function TrainingLog({ today }: Props) {
         </SketchCard>
       )}
 
-      {!paused && bonus && (
+      {/* A confirmed set that beats everything before it. During the ramp
+          this should never appear — 60% of a working weight is not a PR —
+          so it says what happened and gets out of the way. */}
+      {prLift && (
+        <SketchCard filter="rough2" className="px-4 py-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="hand text-[24px]" style={{ color: 'var(--success)' }}>
+                best yet
+              </p>
+              <p className="caption mt-0.5">{prLift} — heavier than any set on record.</p>
+            </div>
+            <button
+              onClick={() => setPrLift(null)}
+              aria-label="dismiss"
+              className="shrink-0 text-[16px] text-[var(--ink-muted)]"
+            >
+              ×
+            </button>
+          </div>
+        </SketchCard>
+      )}
+
+      {closing && (
+        <SessionClose
+          summary={summarise({
+            exercises: Object.entries(draft).map(([name, sets]) => ({
+              name,
+              sets: sets.filter((x): x is WorkoutSet => x !== null),
+            })),
+          })}
+          feel={feel}
+          onFeel={setFeel}
+          busy={finishing}
+          onDone={() => void closeWithFeel(feel)}
+        />
+      )}
+
+      {!paused && !closing && bonus && (
         <BonusPicker
           suggestions={recentlySkipped(plans, workouts, today)}
           library={library}
@@ -410,7 +503,10 @@ export function TrainingLog({ today }: Props) {
         />
       )}
 
-      {!paused && activeSession !== 'rest' && (
+      {/* While the summary is up it IS the screen: it appears after a tap
+          at the bottom of a long list, and leaving the list under it means
+          the thing you just asked for is off-screen above you. */}
+      {!paused && !closing && activeSession !== 'rest' && (
         <>
           {order.map((def, i) => (
             <ExerciseCard
@@ -418,6 +514,15 @@ export function TrainingLog({ today }: Props) {
               def={def}
               last={last.get(def.name)}
               promoted={promoted.has(def.name)}
+              expected={
+                rampWeek === null ? null : expectedWeight(workouts, def.name, rampWeek)
+              }
+              planLabel={planLabel}
+              onPersonalRecord={(weight) => {
+                if (isPersonalRecord(workouts, def.name, weight, inProgress?.id)) {
+                  setPrLift(def.name);
+                }
+              }}
               sets={draft[def.name] ?? Array(def.sets ?? 4).fill(null)}
               onChange={(sets) => updateDraft(def.name, sets)}
               onSetLogged={(d) => restTimer.start(d.name, d.restSec)}
@@ -452,6 +557,30 @@ export function TrainingLog({ today }: Props) {
 
           <AddExercisePanel onAdd={(def) => setExercises([...plan, def])} />
 
+          {/* Skipping is just not logging: an exercise with no sets costs
+              nothing, counts as nothing, and is never mentioned again. */}
+          <p className="caption text-center">
+            Leave anything you don't feel like doing — a skipped exercise
+            costs nothing.
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <label htmlFor="session-notes" className="hand text-[20px]">
+              notes
+            </label>
+            <div className="relative flex min-h-[56px] items-center bg-[var(--paper)] px-4 [--field-stroke:var(--ink)] focus-within:[--field-stroke:var(--accent)]">
+              <SketchBorder filter="rough2" radius={4} strokeWidth={2.2} stroke="var(--field-stroke)" />
+              <input
+                id="session-notes"
+                type="text"
+                value={notes}
+                onChange={(e) => updateNotes(e.target.value)}
+                placeholder="How it went, what to change"
+                className="relative w-full bg-transparent text-base outline-none placeholder:text-[var(--ink-faint)]"
+              />
+            </div>
+          </div>
+
           <Button onClick={finish} disabled={finishing} className="mt-1">
             {finishing ? 'Saving…' : 'Finish session'}
           </Button>
@@ -460,6 +589,71 @@ export function TrainingLog({ today }: Props) {
 
       <RestBar restTimer={restTimer} />
     </div>
+  );
+}
+
+/**
+ * The end of a session: what you did, and how it felt.
+ *
+ * The summary is descriptive and stops there — no target, no comparison
+ * with last time, nothing that turns a light day into a verdict. The
+ * rating is optional and answers one question, energy, which is the thing
+ * a ramp phase is actually testing.
+ */
+function SessionClose({
+  summary,
+  feel,
+  onFeel,
+  busy,
+  onDone,
+}: {
+  summary: { exercises: number; sets: number; volume: number };
+  feel: number | null;
+  onFeel: (n: number) => void;
+  busy: boolean;
+  onDone: () => void;
+}) {
+  return (
+    <SketchCard className="px-5 pt-4 pb-5">
+      <span className="hand text-[26px]">that's the session</span>
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        {[
+          { label: 'exercises', value: String(summary.exercises) },
+          { label: 'sets', value: String(summary.sets) },
+          { label: 'volume', value: Math.round(summary.volume).toLocaleString() },
+        ].map((s) => (
+          <div key={s.label}>
+            <p className="tnum text-[26px] leading-none font-semibold">{s.value}</p>
+            <span className="annot">{s.label}</span>
+          </div>
+        ))}
+      </div>
+
+      <p className="caption mt-4">How did that feel?</p>
+      <div className="mt-2 flex gap-2">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            onClick={() => onFeel(n)}
+            className="tnum relative h-[46px] flex-1 text-[16px] font-semibold"
+            style={
+              feel === n
+                ? { background: 'var(--btn-fill)', color: 'var(--btn-text)', borderRadius: 5 }
+                : { color: 'var(--ink)' }
+            }
+          >
+            {feel !== n && <SketchBorder radius={5} strokeWidth={1.8} stroke="var(--rule)" />}
+            <span className="relative">{n}</span>
+          </button>
+        ))}
+      </div>
+      <p className="annot mt-1">1 flat · 5 strong</p>
+
+      <Button onClick={onDone} disabled={busy} className="mt-4 w-full">
+        {busy ? 'Saving…' : feel === null ? 'Done' : 'Done'}
+      </Button>
+    </SketchCard>
   );
 }
 
