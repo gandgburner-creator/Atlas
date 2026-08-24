@@ -47,8 +47,15 @@ export interface SleepLog {
 // ── Later slices: declared, unused ────────────────────────────────────────
 
 export interface WeightLog {
+  /** Primary key. One weigh-in per day by construction — a second write for
+   * the same date edits the first rather than adding a duplicate, which is
+   * why this table has no auto-increment id: an id would let the same day
+   * be logged twice. */
   date: ISODate;
   kg: number;
+  /** Absent on rows written before timestamps were kept. */
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 /** Grams for `per100g`, a count for `unit` and `scoop` — the food's
@@ -99,8 +106,19 @@ export interface Plate {
 export interface FoodLog {
   id?: number;
   date: ISODate;
-  /** Reference into foodItems. */
-  foodId: number;
+  /**
+   * Reference into foodItems, or null for an entry that never had one.
+   *
+   * The pre-v4 widget logged loose "quick" entries with a free-text
+   * `itemId` and no food behind them. Those rows are real meals and their
+   * snapshotted macros still sum correctly, so they are kept — but they
+   * point at nothing, and `null` says so where a dangling id would not.
+   * See `source`.
+   */
+  foodId: number | null;
+  /** 'quick' marks an entry typed in directly rather than chosen from the
+   * food database. Absent means it came from a food. */
+  source?: 'quick';
   /** Grams for `per100g` foods, a count for `unit`/`scoop`. */
   quantity: number;
   /**
@@ -118,6 +136,9 @@ export interface FoodLog {
 export interface WorkoutSet {
   reps: number;
   weight: number;
+  /** Epoch millis the set was confirmed and locked. Absent on sets logged
+   * before the confirm step existed, and on ones still being edited. */
+  confirmedAt?: number;
 }
 
 export interface WorkoutExercise {
@@ -139,6 +160,16 @@ export interface Workout {
    * were always saved whole under the pre-autosave model.
    */
   status?: 'in_progress' | 'complete';
+
+  /** Free text for the session — how it went, what hurt, what to change. */
+  notes?: string;
+  /** 1–5, asked once at the end. Energy trend, not a score for the session:
+   * nothing reads this to judge whether the session was good enough. */
+  feelRating?: number;
+  /** 1–3 while the ramp phase is running, absent outside it. Recorded on
+   * the row so a session's percentage stays readable later even if the ramp
+   * start date is edited afterwards. */
+  rampWeek?: number;
 
   // ── Timing ──────────────────────────────────────────────────────────
   // Epoch millis, unlike `date` — a session is a real interval, and its
@@ -319,6 +350,40 @@ export class AtlasDB extends Dexie {
       foodItems: '++id, name, favourite',
       plates: '++id, name',
     });
+    // v5: schema drift cleanup. v4 changed the shape of new foodLogs rows
+    // but left the old ones alone, so the table carried two shapes at once
+    // and the declared type was a lie for half of it. Same story for
+    // `status` on workouts, added after the first sessions were logged.
+    //
+    // Both are data-only migrations — no index changes — so the stores()
+    // call restates v4 unchanged and the work happens in upgrade().
+    this.version(5)
+      .stores({
+        foodLogs: '++id, date, foodId, plateId',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('foodLogs')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.foodId !== undefined) return;
+            // A pre-v4 quick entry: keep the meal, say plainly that it
+            // references no food rather than inventing an id for it.
+            row.foodId = null;
+            row.source = 'quick';
+            delete row.itemId;
+          });
+        await tx
+          .table('workouts')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            // Rows predating the field. Every read already treats absent as
+            // complete (the filters test `!== 'in_progress'`), so this
+            // changes no behaviour — it makes the stored data say what the
+            // app already believes, which matters once it's exported.
+            if (row.status === undefined) row.status = 'complete';
+          });
+      });
   }
 }
 

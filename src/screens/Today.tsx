@@ -5,6 +5,7 @@ import { DashedRule, SketchBorder, SketchCard } from '../components/Sketch';
 import { TimeField } from '../components/TimeField';
 import { saveRamp } from '../db/config';
 import { getSleepLog, saveSleepLog } from '../db/sleep';
+import { sleepOnsetWarning } from '../domain/plausible';
 import {
   isRampComplete,
   isWeekRepeated,
@@ -130,7 +131,11 @@ export function Today({ ramp, today, onRampChange }: Props) {
             value={onset}
             onChange={setOnset}
             optional
-            hint="A rough estimate is fine."
+            // A bedtime that doesn't fit the wake time is nearly always an
+            // AM/PM slip. Said once, next to the field, and never in the
+            // way: the entry saves either way.
+            hint={sleepOnsetWarning(onset, wake) ?? 'A rough estimate is fine.'}
+            hintTone={sleepOnsetWarning(onset, wake) ? 'warn' : undefined}
           />
 
           <div className="flex flex-col gap-2">

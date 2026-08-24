@@ -7,6 +7,9 @@ interface Props {
   onChange: (value: string) => void;
   optional?: boolean;
   hint?: string;
+  /** 'warn' colours the hint when it's flagging a likely typo. Still just a
+   * hint — nothing is blocked and the field is never marked invalid. */
+  hintTone?: 'warn';
   /** Native input type — 'time' or 'date'. */
   type?: 'time' | 'date';
 }
@@ -25,6 +28,7 @@ export function TimeField({
   onChange,
   optional,
   hint,
+  hintTone,
   type = 'time',
 }: Props) {
   const id = useId();
@@ -56,7 +60,14 @@ export function TimeField({
           className="tnum relative w-full bg-transparent text-[22px] font-semibold outline-none"
         />
       </div>
-      {hint && <p className="caption">{hint}</p>}
+      {hint && (
+        <p
+          className="caption"
+          style={hintTone === 'warn' ? { color: 'var(--accent)' } : undefined}
+        >
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

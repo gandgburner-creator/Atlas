@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { allSleepLogs } from '../db/sleep';
 import { Button } from '../components/Button';
 import { DashedRule, SketchBorder, SketchCard } from '../components/Sketch';
-import { getWeightPlan } from '../db/config';
+import { getExercisePlans, getLiftRamp, getWeightPlan } from '../db/config';
 import { db, type Workout } from '../db/schema';
 import type { ModuleFlags } from '../domain/commitments';
 import {
@@ -24,7 +24,9 @@ import { daysLogged, sevenDayAverageWake } from '../domain/stats';
 import { addDays, formatDayLabel, fromISODate, weekStartOf } from '../domain/time';
 import { formatHours } from '../domain/today';
 import { latestRollingAvg, rollingAverageSeries } from '../domain/weight';
+import { DAY_TYPES, liftHistory } from '../domain/liftRamp';
 import { SleepChart } from './SleepChart';
+import { LiftProgressRow } from './TrainingRamp';
 import { WeightChart } from './WeightChart';
 
 interface Props {
@@ -204,6 +206,8 @@ export function Progress({ ramp, today, moduleFlags }: Props) {
         <WeightChart series={weightSeries} plan={other.plan} today={today} />
       )}
 
+      <LiftProgressCard workouts={other?.allWorkouts ?? []} today={today} />
+
       <RollingVolumeCard workouts={other?.allWorkouts ?? []} today={today} />
 
       <TimeOfDayCard workouts={other?.allWorkouts ?? []} />
@@ -213,6 +217,46 @@ export function Progress({ ramp, today, moduleFlags }: Props) {
         <LetterCard weekStart={weekStart} letter={other?.letter ?? undefined} />
       )}
     </div>
+  );
+}
+
+/**
+ * Weight over sessions, per lift.
+ *
+ * Only while the ramp phase is running, and only for the lifts it
+ * programmes — outside it, the four-week volume card below is the better
+ * read. Sorted by how recently the lift was trained, so today's session is
+ * at the top where you can see what it did.
+ */
+function LiftProgressCard({ workouts, today }: { workouts: Workout[]; today: string }) {
+  const ramp = useLiveQuery(getLiftRamp, [today]);
+  const plans = useLiveQuery(getExercisePlans, [today]);
+  if (!ramp || !plans) return null;
+
+  const names = [...new Set(DAY_TYPES.flatMap((d) => (plans[d] ?? []).map((e) => e.name)))];
+  const rows = names
+    .map((name) => ({ name, points: liftHistory(workouts, name) }))
+    .filter((r) => r.points.length > 0)
+    .sort((a, b) =>
+      (b.points[b.points.length - 1]?.date ?? '').localeCompare(
+        a.points[a.points.length - 1]?.date ?? '',
+      ),
+    );
+  if (rows.length === 0) return null;
+
+  return (
+    <SketchCard className="px-4 pt-4 pb-3">
+      <span className="hand text-[26px]">per lift</span>
+      <p className="caption mt-0.5">
+        Top set each session, oldest left. The climb through the ramp is the
+        plan, not a comeback.
+      </p>
+      <div className="mt-2">
+        {rows.map((r) => (
+          <LiftProgressRow key={r.name} name={r.name} points={r.points} />
+        ))}
+      </div>
+    </SketchCard>
   );
 }
 

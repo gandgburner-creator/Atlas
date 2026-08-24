@@ -22,6 +22,7 @@ import {
   restRemaining,
   type RestTimerState,
 } from '../domain/rest';
+import { setLoadWarning } from '../domain/plausible';
 import { formatDayLabel } from '../domain/time';
 import {
   cancelRestNotification,
@@ -302,6 +303,15 @@ interface ExerciseCardProps {
   sets: Draft;
   /** Brought to the top because it got no sets last time. */
   promoted?: boolean;
+  /** Ramp phase: the weight this week's percentage works out at. Prefills
+   * an untouched set and is shown as the plan. Null when there's no
+   * history to take a percentage of. */
+  expected?: number | null;
+  /** Ramp phase: 'week 2 · 70%', shown under the rep range. */
+  planLabel?: string;
+  /** Called with the top weight when a confirmed set beats every previous
+   * one for this lift. */
+  onPersonalRecord?: (weight: number) => void;
   onChange: (sets: Draft) => void;
   onSetLogged?: (def: ExerciseDef) => void;
   /** Rename / reorder / remove / edit rest. */
@@ -319,6 +329,9 @@ export function ExerciseCard({
   last,
   sets,
   promoted = false,
+  expected,
+  planLabel,
+  onPersonalRecord,
   onChange,
   onSetLogged,
   manage,
@@ -328,23 +341,52 @@ export function ExerciseCard({
   const [editing, setEditing] = useState<number | null>(null);
   const [managing, setManaging] = useState(false);
 
+  /**
+   * A set wildly out of line with the others already logged for this
+   * exercise today — "80, 80, 80, 8" is a slipped digit, and it silently
+   * corrupts volume and every progression read off it.
+   *
+   * Derived from what's on screen rather than latched at log time, so
+   * correcting the set makes the note go away by itself. Nothing is
+   * blocked and nothing is auto-changed: if 8 kg is what you lifted, log
+   * it and read past this.
+   */
+  const loadWarnings = sets.map((s, i) =>
+    s === null
+      ? null
+      : setLoadWarning(
+          s.weight,
+          sets.slice(0, i).filter((p): p is WorkoutSet => p !== null).map((p) => p.weight),
+        ),
+  );
+
   function prefill(i: number) {
     const from = last?.sets[Math.min(i, (last?.sets.length ?? 1) - 1)];
-    const filled: WorkoutSet = from
-      ? { reps: from.reps, weight: from.weight }
-      : { reps: def.seedReps ?? def.repRangeTop, weight: def.seedWeight ?? 0 };
+    // During the ramp the planned weight wins over "same as last time":
+    // last time was a different percentage, and following it would undo
+    // the ramp entirely.
+    const filled: WorkoutSet =
+      expected != null
+        ? { reps: def.repRangeBottom ?? def.repRangeTop, weight: expected }
+        : from
+          ? { reps: from.reps, weight: from.weight }
+          : { reps: def.seedReps ?? def.repRangeTop, weight: def.seedWeight ?? 0 };
     const next = [...sets];
-    next[i] = filled;
+    next[i] = { ...filled, confirmedAt: Date.now() };
     onChange(next);
     onSetLogged?.(def);
+    if (filled.weight > 0) onPersonalRecord?.(filled.weight);
   }
 
   function confirm(i: number, v: WorkoutSet) {
     const next = [...sets];
-    next[i] = v;
+    // The confirm tap is what locks the set: the stamp is the record that
+    // this number was deliberate rather than a half-finished edit.
+    next[i] = { ...v, confirmedAt: Date.now() };
     onChange(next);
     setEditing(null);
     onSetLogged?.(def);
+    if (v.weight > 0) onPersonalRecord?.(v.weight);
   }
 
   function clear(i: number) {
@@ -359,7 +401,15 @@ export function ExerciseCard({
       <div className="flex items-start justify-between gap-2">
         <div>
           <span className="hand text-[26px]">{def.name}</span>
-          <p className="caption">{repRangeLabel(def)}</p>
+          <p className="caption">
+            {repRangeLabel(def)}
+            {planLabel && ` · ${planLabel}`}
+          </p>
+          {expected != null && (
+            <p className="caption">
+              plan: <span className="tnum font-semibold">{expected} kg</span>
+            </p>
+          )}
           {/* Plain statement of where it came from. Not "missed", not
               "owed" — nothing was lost by not doing it last time. Caption
               styling rather than the uppercase annotation: this is an aside,
@@ -423,7 +473,8 @@ export function ExerciseCard({
               onClear={() => clear(i)}
             />
           ) : (
-            <div key={i} className="flex items-center gap-2">
+            <div key={i} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => (s ? setEditing(i) : prefill(i))}
                 className="relative flex h-[52px] flex-1 items-center justify-between px-4"
@@ -455,6 +506,12 @@ export function ExerciseCard({
                   edit
                 </button>
               )}
+            </div>
+            {loadWarnings[i] && (
+              <p className="caption" style={{ color: 'var(--accent)' }}>
+                {loadWarnings[i]}
+              </p>
+            )}
             </div>
           ),
         )}

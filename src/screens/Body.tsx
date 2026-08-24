@@ -20,6 +20,7 @@ import { formatDayLabel, todayISO } from '../domain/time';
 import { passRestDays, sessionFor } from '../domain/training';
 import { latestRollingAvg, rollingAverageSeries } from '../domain/weight';
 import { useNav } from '../nav';
+import { RampPhaseCard, RampTodayCard, useLiftRampData } from './TrainingRamp';
 import { WeightChart } from './WeightChart';
 
 interface Props {
@@ -33,7 +34,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
   const [savingKg, setSavingKg] = useState(false);
 
   const data = useLiveQuery(async () => {
-    const [weights, lean, plan, pinned, stageDates, training, todayLog, inbodyLatest] =
+    const [weights, lean, plan, pinned, stageDates, training, todayLog] =
       await Promise.all([
         db.weightLogs.toArray(),
         getLeanMassKg(),
@@ -42,11 +43,11 @@ export function BodyScreen({ today, moduleFlags }: Props) {
         getStageDates(),
         getTrainingState(),
         db.weightLogs.get(today),
-        db.inbody.orderBy('date').last(),
       ]);
-    return { weights, lean, plan, pinned, stageDates, training, todayLog, inbodyLatest };
+    return { weights, lean, plan, pinned, stageDates, training, todayLog };
   }, [today]);
 
+  const rampData = useLiftRampData(today);
   const avgForEffect = data ? latestRollingAvg(data.weights) : null;
   const leanForEffect = data?.lean;
 
@@ -67,6 +68,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
 
   if (!data) return null;
   const { weights, lean, plan, pinned, stageDates, training, todayLog } = data;
+  const rampActive = Boolean(rampData?.ramp);
 
   const series = rollingAverageSeries(weights);
   const avg = latestRollingAvg(weights);
@@ -82,7 +84,18 @@ export function BodyScreen({ today, moduleFlags }: Props) {
     if (!kg || kg < 30 || kg > 250) return;
     setSavingKg(true);
     try {
-      await db.weightLogs.put({ date: todayISO(), kg });
+      const date = todayISO();
+      const existing = await db.weightLogs.get(date);
+      const now = Date.now();
+      // Timestamped like every other table, so a correction is visible as a
+      // correction. `date` stays the primary key: re-weighing today edits
+      // today rather than adding a second row for it.
+      await db.weightLogs.put({
+        date,
+        kg,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
       setKgInput('');
     } finally {
       setSavingKg(false);
@@ -202,7 +215,15 @@ export function BodyScreen({ today, moduleFlags }: Props) {
         </SketchCard>
       )}
 
-      {/* ── Training ───────────────────────────────────────────────────── */}
+      {/* ── Ramp phase ─────────────────────────────────────────────────── */}
+      <RampPhaseCard today={today} />
+      <RampTodayCard today={today} />
+
+      {/* ── Training ─────────────────────────────────────────────────────
+          Hidden while the ramp runs: the ramp card above already names
+          today's session and opens the same log, and two cards saying the
+          same thing is worse than one. */}
+      {!rampActive && (
       <button onClick={() => nav.push({ name: 'training-log' })} className="text-left">
         <SketchCard className="px-5 pt-4 pb-5">
           <div className="flex items-center justify-between">
@@ -221,6 +242,7 @@ export function BodyScreen({ today, moduleFlags }: Props) {
           </p>
         </SketchCard>
       </button>
+      )}
 
       {/* ── InBody ─────────────────────────────────────────────────────── */}
       {moduleFlags.insight && <InBodyCard today={today} />}

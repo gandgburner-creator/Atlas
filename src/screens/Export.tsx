@@ -3,7 +3,13 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { PushHeader, YesNo } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
-import { backupFilename, buildBackup, looksLikeBackup, restoreBackup } from '../db/backup';
+import {
+  backupFilename,
+  buildBackup,
+  isFromNewerBuild,
+  looksLikeBackup,
+  restoreBackup,
+} from '../db/backup';
 import { getExportReminder, saveExportReminder } from '../db/config';
 import { buildAnalysisMarkdown, type AnalysisRange } from '../domain/analysis';
 
@@ -34,7 +40,7 @@ export function ExportScreen({ today }: { today: string }) {
   async function downloadBackup() {
     setBackupBusy(true);
     try {
-      const data = await buildBackup(today, includePhotos);
+      const data = await buildBackup(includePhotos);
       const filename = backupFilename(today);
       const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
       const file = new File([blob], filename, { type: 'application/json' });
@@ -69,6 +75,13 @@ export function ExportScreen({ today }: { today: string }) {
       const data: unknown = JSON.parse(text);
       if (!looksLikeBackup(data)) {
         setRestoreError("That file doesn't look like an Atlas backup.");
+        return;
+      }
+      if (isFromNewerBuild(data)) {
+        setRestoreError(
+          'That backup was made by a newer version of Atlas. Update first — ' +
+            'restoring it here would drop whatever this build does not know about.',
+        );
         return;
       }
       await restoreBackup(data);

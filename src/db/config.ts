@@ -227,6 +227,51 @@ const OLD_LOCKED_LEGS: ExerciseDef[] = [
   { name: 'Romanian deadlift', repRangeTop: 10, repRangeBottom: 8, equipment: 'barbell', restSec: 180 },
 ];
 
+/**
+ * The four-day ramp rotation.
+ *
+ * Two sets an exercise across all three ramp weeks, 8–12 reps, 90–120s
+ * rest, never to failure. The weights aren't here: they're a percentage of
+ * your own previous best, calculated per week — see domain/liftRamp.
+ *
+ * Editable like every other plan once the ramp is running. These are the
+ * starting point, not a lock.
+ */
+export const RAMP_EXERCISE_PLANS: ExercisePlans = {
+  mon: [
+    { name: 'Pull Down', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Shoulder Press', repRangeTop: 12, repRangeBottom: 8, equipment: 'dumbbell', restSec: 120, sets: 2 },
+    { name: 'Squat', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 120, sets: 2 },
+    { name: 'RDL', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 120, sets: 2 },
+    { name: 'Lateral Raise', repRangeTop: 12, repRangeBottom: 8, equipment: 'dumbbell', restSec: 90, sets: 2 },
+    { name: 'Bicep Curl', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 90, sets: 2 },
+  ],
+  tue: [
+    { name: 'Bench Press', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 120, sets: 2 },
+    { name: 'Low Row', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Leg Press', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Leg Curl', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Face Pull', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 90, sets: 2 },
+    { name: 'Tricep Pressdown', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 90, sets: 2 },
+  ],
+  wed: [
+    { name: 'Incline Press', repRangeTop: 12, repRangeBottom: 8, equipment: 'dumbbell', restSec: 120, sets: 2 },
+    { name: 'Pull Ups', repRangeTop: 12, repRangeBottom: 8, equipment: 'bodyweight', restSec: 120, sets: 2, progressToWeighted: true },
+    { name: 'Hip Extension', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Hamstring Curl', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Rear Delt Fly', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 90, sets: 2 },
+    { name: 'Hammer Curl', repRangeTop: 12, repRangeBottom: 8, equipment: 'dumbbell', restSec: 90, sets: 2 },
+  ],
+  thu: [
+    { name: 'Decline Press', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 120, sets: 2 },
+    { name: 'High Row', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Squat', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 120, sets: 2 },
+    { name: 'Hip Extension', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 120, sets: 2 },
+    { name: 'Shrugs', repRangeTop: 12, repRangeBottom: 8, equipment: 'barbell', restSec: 90, sets: 2 },
+    { name: 'Overhead Tricep Extension', repRangeTop: 12, repRangeBottom: 8, equipment: 'machine', restSec: 90, sets: 2 },
+  ],
+};
+
 export async function getExercisePlans(): Promise<ExercisePlans> {
   const stored = await get<ExercisePlans>('exercisePlans');
   if (!stored) return DEFAULT_EXERCISE_PLANS;
@@ -241,6 +286,98 @@ export async function getExercisePlans(): Promise<ExercisePlans> {
 
 export function saveExercisePlans(p: ExercisePlans): Promise<void> {
   return set('exercisePlans', p);
+}
+
+// ── Ramp phase ────────────────────────────────────────────────────────────
+
+/**
+ * The three-week re-entry block, if one is running.
+ *
+ * Only a start date is stored. Which week you're in, what percentage that
+ * means and whether the phase is over are all derived from it against
+ * today — see domain/liftRamp — so there is no week counter to advance, get
+ * stuck, or disagree with the calendar.
+ */
+export interface LiftRampState {
+  startDate: string; // ISODate
+  /** The split and mode in force before the ramp, restored when it ends so
+   * finishing the phase doesn't cost the program that was there before. */
+  priorSplit: string[];
+  priorMode: 'queue' | 'fixed';
+  priorPointer: number;
+  /** Set once the "ready to progress" prompt has been acknowledged, so it
+   * is shown after week 3 and then not again. */
+  transitionSeen?: boolean;
+}
+
+export function getLiftRamp(): Promise<LiftRampState | undefined> {
+  return get<LiftRampState>('liftRamp');
+}
+
+/**
+ * Begin the ramp: remember the current program, switch to the Monday-to-
+ * Thursday rotation in fixed-weekday mode, and seed the four day plans for
+ * anyone who hasn't got them yet.
+ *
+ * Fixed mode means the day of the week picks the session directly, so there
+ * is no pointer to keep in step and a missed Tuesday simply isn't a
+ * Tuesday session — exactly the behaviour a weekday program wants.
+ */
+export async function startLiftRamp(
+  startDate: string,
+  split: string[],
+): Promise<void> {
+  return queueTraining(async () => {
+    const state = await getTrainingState();
+    const ramp: LiftRampState = {
+      startDate,
+      priorSplit: state.split,
+      priorMode: state.mode,
+      priorPointer: state.pointer,
+    };
+    await set('liftRamp', ramp);
+
+    const plans = await getExercisePlans();
+    const seeded = { ...RAMP_EXERCISE_PLANS, ...plans };
+    // Any day the user has never trained takes the program's own list; a
+    // day they've already edited keeps their edits.
+    for (const day of Object.keys(RAMP_EXERCISE_PLANS)) {
+      if (!plans[day]) seeded[day] = RAMP_EXERCISE_PLANS[day]!;
+    }
+    await saveExercisePlans(seeded);
+
+    await saveTrainingState({ ...state, split, mode: 'fixed', pointer: 0 });
+  });
+}
+
+/** End the ramp and put the previous program back exactly as it was. */
+export async function endLiftRamp(): Promise<void> {
+  return queueTraining(async () => {
+    const ramp = await getLiftRamp();
+    if (!ramp) return;
+    const state = await getTrainingState();
+    await saveTrainingState({
+      ...state,
+      split: ramp.priorSplit,
+      mode: ramp.priorMode,
+      pointer: ramp.priorPointer,
+    });
+    await set('liftRamp', null);
+  });
+}
+
+/** Acknowledge the "ramp phase complete" prompt without ending the phase. */
+export async function markRampTransitionSeen(): Promise<void> {
+  const ramp = await getLiftRamp();
+  if (ramp) await set('liftRamp', { ...ramp, transitionSeen: true });
+}
+
+/** Session notes and the end-of-session feel rating. */
+export async function saveSessionMeta(
+  workoutId: number,
+  patch: { notes?: string; feelRating?: number; rampWeek?: number },
+): Promise<void> {
+  await db.workouts.update(workoutId, patch);
 }
 
 /**
@@ -770,20 +907,12 @@ export function savePinnedProjection(
   return set('pinnedProjection', p);
 }
 
-/** Observed-rate cache: recomputed at most once per calendar day. */
-export interface RateCache {
-  date: string;
-  ratePerWeek: number | null;
-  windowDays: number;
-}
-
-export function getRateCache(): Promise<RateCache | undefined> {
-  return get<RateCache>('rateCache');
-}
-
-export function saveRateCache(c: RateCache): Promise<void> {
-  return set('rateCache', c);
-}
+/*
+ * The observed rate used to be cached here under 'rateCache', keyed on the
+ * calendar day. It is computed directly now — see Projection. The stored
+ * key is left where it is: a stale value nothing reads is inert, and
+ * deleting user config to tidy up is not a trade worth making.
+ */
 
 // ── Targets ───────────────────────────────────────────────────────────────
 

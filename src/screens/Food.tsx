@@ -114,7 +114,11 @@ export function FoodScreen({ today }: { today: string }) {
     // then open it for naming and adjustment — a real row from the first
     // tap, per the same autosave principle as everywhere else.
     const byFood = new Map<number, number>();
-    for (const l of todayLogs) byFood.set(l.foodId, (byFood.get(l.foodId) ?? 0) + l.quantity);
+    for (const l of todayLogs) {
+      // A quick entry has no food to put on a plate.
+      if (l.foodId === null) continue;
+      byFood.set(l.foodId, (byFood.get(l.foodId) ?? 0) + l.quantity);
+    }
     if (byFood.size === 0) return;
     const id = await addPlate({
       name: 'New plate',
@@ -246,7 +250,7 @@ export function FoodScreen({ today }: { today: string }) {
         ) : (
           <SketchCard className="px-4 py-2">
             {todayLogs.map((l) => {
-              const food = foodById.get(l.foodId);
+              const food = l.foodId === null ? undefined : foodById.get(l.foodId);
               return (
                 <div
                   key={l.id}

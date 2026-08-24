@@ -7,10 +7,8 @@ import { DashedRule, SketchCard } from '../components/Sketch';
 import {
   getLeanMassKg,
   getPinnedProjection,
-  getRateCache,
   getWeightPlan,
   savePinnedProjection,
-  saveRateCache,
 } from '../db/config';
 import { db } from '../db/schema';
 import {
@@ -41,14 +39,13 @@ export function Projection({ today }: { today: string }) {
   const nav = useNav();
 
   const data = useLiveQuery(async () => {
-    const [weights, lean, plan, pinned, cache] = await Promise.all([
+    const [weights, lean, plan, pinned] = await Promise.all([
       db.weightLogs.toArray(),
       getLeanMassKg(),
       getWeightPlan(),
       getPinnedProjection(),
-      getRateCache(),
     ]);
-    return { weights, lean, plan, pinned, cache };
+    return { weights, lean, plan, pinned };
   }, [today]);
 
   const [bfInput, setBfInput] = useState<string | null>(null);
@@ -60,29 +57,19 @@ export function Projection({ today }: { today: string }) {
   const currentBf =
     avg !== null && lean !== undefined ? clampBf(bfPercent(avg, lean)) : null;
 
-  // Observed rate, recomputed at most once per calendar day.
-  const [rate, setRate] = useState<{ ratePerWeek: number } | null | undefined>(
-    undefined,
+  /**
+   * Observed rate, computed from the logs on hand.
+   *
+   * This used to be cached in config, keyed on the calendar day. That made
+   * a correction logged later the same day invisible until tomorrow: the
+   * cache was written the first time the screen was opened and only the
+   * date could invalidate it. A least-squares fit over at most a month of
+   * daily points costs nothing, so there is no cache to go stale.
+   */
+  const rate = useMemo(
+    () => (data ? observedRate(data.weights, today) : undefined),
+    [data, today],
   );
-  useEffect(() => {
-    if (!data) return;
-    if (data.cache && data.cache.date === today) {
-      setRate(
-        data.cache.ratePerWeek === null
-          ? null
-          : { ratePerWeek: data.cache.ratePerWeek },
-      );
-      return;
-    }
-    const r = observedRate(data.weights, today);
-    void saveRateCache({
-      date: today,
-      ratePerWeek: r?.ratePerWeek ?? null,
-      windowDays: r?.windowDays ?? 0,
-    });
-    setRate(r ? { ratePerWeek: r.ratePerWeek } : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.cache, data?.weights.length, today]);
 
   // Default target: one stage down from current.
   useEffect(() => {

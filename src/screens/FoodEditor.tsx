@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader, YesNo } from '../components/Chrome';
+import { caloriesWarning } from '../domain/plausible';
 import { Icon } from '../components/Icon';
 import { SketchBorder, SketchCard } from '../components/Sketch';
 import { getModuleFlags } from '../db/config';
@@ -68,6 +69,14 @@ export function FoodEditorScreen({ id }: { id?: number }) {
     values.protein !== null &&
     values.carbs !== null &&
     values.fat !== null;
+
+  const kcalMismatch =
+    values.kcal !== null &&
+    values.protein !== null &&
+    values.carbs !== null &&
+    values.fat !== null
+      ? caloriesWarning(values.kcal, values.protein, values.carbs, values.fat)
+      : null;
 
   async function save() {
     if (!valid) return;
@@ -148,6 +157,15 @@ export function FoodEditorScreen({ id }: { id?: number }) {
             <NumberField label="carbs" unit="g" value={carbs} onChange={setCarbs} />
             <NumberField label="fat" unit="g" value={fat} onChange={setFat} />
           </div>
+
+          {/* The label's calories stay authoritative — this only points out
+              that the two numbers on the packet disagree, in case one of
+              them was mistyped. Saving is unaffected either way. */}
+          {kcalMismatch && (
+            <p className="caption" style={{ color: 'var(--accent)' }}>
+              {kcalMismatch} Saved as entered.
+            </p>
+          )}
 
           <div className="flex items-center justify-between border-t-[1.5px] border-dashed border-[var(--rule)] pt-3">
             <span className="hand text-[19px] text-[var(--ink-muted)]">favourite</span>
