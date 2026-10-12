@@ -3,7 +3,7 @@ import type { DuoSession, DuoSet } from '../db/schema';
 import {
   buildHistory, buildSeason, canonicalName, dayKeyFor, dayPlannedSets, DAY_KEYS, DUO_PROGRAM,
   epley, isPr, lastTime, nextSeasonStart, plannedSets, resolveSlot, sessionKey, sessionStats,
-  targetFor, weekPlannedSets, weekScore, weekStartFor, weekWinner, EMPTY_PREFS, type DayKey, type Profile,
+  canon, mergeSession, targetFor, weekPlannedSets, weekScore, weekStartFor, weekWinner, EMPTY_PREFS, type DayKey, type Profile,
 } from './duo';
 import { toISODate } from './time';
 
@@ -197,5 +197,44 @@ describe('targets and PRs', () => {
     expect(lastTime(g, 'Lat Pulldown')?.sets[0]?.weight).toBe(50);
     expect(lastTime(g, 'Face pull')?.sets.length).toBe(1); // unmapped stays under its own name
     expect(buildHistory('gaby', [], legacy, undefined, 49)).toEqual([]);
+  });
+});
+
+describe('merging two copies of a session (sync)', () => {
+  const base = sess('gaby', W1, 'mon', 0);
+  const withSets = (updatedAt: number, sets: Record<string, [number, number][]>): DuoSession => ({
+    ...base,
+    updatedAt,
+    exercises: Object.entries(sets).map(([slotId, ss]) => ({
+      slotId, name: DUO_PROGRAM.mon.slots.find((x) => x.id === slotId)!.name,
+      sets: ss.map(([w, t]) => ({ weight: w, reps: 8, confirmedAt: t })),
+    })),
+  });
+  it('keeps sets that only one phone has', () => {
+    const a = withSets(10, { 'mon-1': [[20, 1], [20, 2]] });
+    const b = withSets(20, { 'mon-2': [[10, 5]] });
+    const m = mergeSession(a, b);
+    expect(m.exercises.map((e) => e.slotId).sort()).toEqual(['mon-1', 'mon-2']);
+    expect(m.exercises.find((e) => e.slotId === 'mon-1')!.sets.length).toBe(2);
+  });
+  it('per set, the latest confirmation wins', () => {
+    const a = withSets(10, { 'mon-1': [[20, 1], [20, 2]] });
+    const b = withSets(20, { 'mon-1': [[22.5, 9]] });
+    const m = mergeSession(a, b);
+    const sets = m.exercises[0]!.sets;
+    expect(sets[0]!.weight).toBe(22.5); // edited later on the other phone
+    expect(sets[1]!.weight).toBe(20); // only one phone had set 2
+  });
+  it('is the same whichever order the copies arrive in', () => {
+    const a = withSets(10, { 'mon-1': [[20, 1]], 'mon-3': [[5, 3]] });
+    const b = withSets(20, { 'mon-1': [[25, 4]], 'mon-2': [[10, 5]] });
+    expect(canon(mergeSession(a, b))).toBe(canon(mergeSession(b, a)));
+  });
+  it('merging a session with itself changes nothing', () => {
+    const a = withSets(10, { 'mon-1': [[20, 1], [20, 2]] });
+    expect(canon(mergeSession(a, a))).toBe(canon(a));
+  });
+  it('compares records regardless of key order or undefined fields', () => {
+    expect(canon({ a: 1, b: [1, { c: 2, d: undefined }] })).toBe(canon({ b: [1, { c: 2 }], a: 1 }));
   });
 });

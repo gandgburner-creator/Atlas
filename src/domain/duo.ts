@@ -537,3 +537,56 @@ export function nextSeasonStart(today: ISODate): ISODate {
   const ws = weekStartOf(today);
   return ws === today ? today : addDays(ws, 7);
 }
+
+// ── Merging (for sync) ────────────────────────────────────────────────────
+
+/**
+ * Combine two copies of the same session, never losing a confirmed set.
+ *
+ * Both phones can log into the same session (one person logging both of
+ * you while the other phone logs too), so a plain "latest copy wins" would
+ * drop sets. Instead sets are merged slot by slot and index by index, the
+ * most recently confirmed copy of each winning; only the session-level
+ * fields (note, status) follow whichever copy was edited last.
+ */
+export function mergeSession(a: DuoSession, b: DuoSession): DuoSession {
+  const newer = (a.updatedAt ?? 0) >= (b.updatedAt ?? 0) ? a : b;
+  const older = newer === a ? b : a;
+  const slotIds = [...newer.exercises, ...older.exercises].map((e) => e.slotId);
+  const exercises = [...new Set(slotIds)].map((slotId) => {
+    const ea = newer.exercises.find((e) => e.slotId === slotId);
+    const eb = older.exercises.find((e) => e.slotId === slotId);
+    if (!ea || !eb) return (ea ?? eb)!;
+    const n = Math.max(ea.sets.length, eb.sets.length);
+    const sets: (DuoSet | null)[] = [];
+    for (let i = 0; i < n; i++) {
+      const x = ea.sets[i] ?? null;
+      const y = eb.sets[i] ?? null;
+      sets.push(!x ? y : !y ? x : y.confirmedAt > x.confirmedAt ? y : x);
+    }
+    return { slotId, name: ea.sets.some(Boolean) ? ea.name : eb.name, sets };
+  });
+  return {
+    ...newer,
+    exercises,
+    startedAt: Math.min(a.startedAt, b.startedAt),
+    updatedAt: Math.max(a.updatedAt ?? 0, b.updatedAt ?? 0),
+  };
+}
+
+export const hasConfirmedSets = (s: DuoSession): boolean =>
+  s.exercises.some((e) => e.sets.some(Boolean));
+
+/** JSON with sorted keys, so two equal records compare equal whatever their key order. */
+export function canon(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canon(o[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
+}

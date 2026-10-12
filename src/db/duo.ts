@@ -10,6 +10,17 @@ import {
   type Profile,
 } from '../domain/duo';
 
+// ── Change events (the sync layer listens; nothing else needs to) ─────────
+
+const listeners = new Set<() => void>();
+export function onDuoChange(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+function changed(): void {
+  listeners.forEach((cb) => cb());
+}
+
 /**
  * Data layer for the two-person program. Every read and write goes through
  * this file, so moving to a shared backend means replacing these functions
@@ -101,6 +112,7 @@ export async function logBodyweight(p: Profile, date: ISODate, kg: number): Prom
   } else {
     await db.duoWeights.put({ key: `${p}:${date}`, profile: p, date, kg, updatedAt: now } as DuoWeight);
   }
+  changed();
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────
@@ -120,7 +132,7 @@ export async function startDuoSession(
     if (existing) return existing;
     const s: DuoSession = {
       key, profile, weekStart, day, date, bodyweight,
-      exercises: [], deload, status: 'in_progress', startedAt: Date.now(),
+      exercises: [], deload, status: 'in_progress', startedAt: Date.now(), updatedAt: Date.now(),
     };
     await db.duoSessions.put(s);
     return s;
@@ -133,8 +145,10 @@ async function mutate(key: string, fn: (s: DuoSession) => void): Promise<void> {
     const s = await db.duoSessions.get(key);
     if (!s) return;
     fn(s);
+    s.updatedAt = Date.now();
     await db.duoSessions.put(s);
   });
+  changed();
 }
 
 /** Saved the instant it's confirmed. Re-confirming an edited set overwrites it. */
@@ -175,8 +189,10 @@ export async function finishDuoSession(key: string): Promise<void> {
     }
     s.status = 'complete';
     s.endedAt = Date.now();
+    s.updatedAt = Date.now();
     await db.duoSessions.put(s);
   });
+  changed();
 }
 
 // ── Preferences, deload, season ───────────────────────────────────────────
@@ -207,7 +223,8 @@ export function toggleDeload(weekStart: ISODate): Promise<void> {
     const cur = ((await db.config.get('duoDeloadWeeks'))?.value as string[] | undefined) ?? [];
     const next = cur.includes(weekStart) ? cur.filter((w) => w !== weekStart) : [...cur, weekStart];
     await db.config.put({ key: 'duoDeloadWeeks', value: next });
-  });
+    await db.config.put({ key: SHARED_STAMP, value: Date.now() });
+  }).then(changed);
 }
 
 export async function getSeasonStart(): Promise<ISODate> {
@@ -216,5 +233,87 @@ export async function getSeasonStart(): Promise<ISODate> {
 
 /** Resets the scoreboard only: every session and every log stays. */
 export function setSeasonStart(date: ISODate): Promise<void> {
-  return db.config.put({ key: 'duoSeasonStart', value: date }).then(() => undefined);
+  return db.transaction('rw', db.config, async () => {
+    await db.config.put({ key: 'duoSeasonStart', value: date });
+    await db.config.put({ key: SHARED_STAMP, value: Date.now() });
+  }).then(changed);
+}
+
+// ── Shared settings and linking ───────────────────────────────────────────
+
+const SHARED_STAMP = 'duoSharedStamp';
+
+export interface SharedConfig {
+  deloadWeeks: string[];
+  seasonStart: ISODate;
+  updatedAt: number;
+}
+
+/** Null until deload or the season has actually been changed on this phone. */
+export async function getSharedConfig(): Promise<SharedConfig | null> {
+  const stamp = ((await db.config.get(SHARED_STAMP))?.value as number | undefined) ?? 0;
+  if (!stamp) return null;
+  return { deloadWeeks: await getDeloadWeeks(), seasonStart: await getSeasonStart(), updatedAt: stamp };
+}
+
+/** Apply another phone's settings if they are newer. Does not fire a change event. */
+export async function applySharedConfig(c: SharedConfig): Promise<void> {
+  await db.transaction('rw', db.config, async () => {
+    const stamp = ((await db.config.get(SHARED_STAMP))?.value as number | undefined) ?? 0;
+    if (c.updatedAt <= stamp) return;
+    await db.config.put({ key: 'duoDeloadWeeks', value: c.deloadWeeks });
+    await db.config.put({ key: 'duoSeasonStart', value: c.seasonStart });
+    await db.config.put({ key: SHARED_STAMP, value: c.updatedAt });
+  });
+}
+
+const HOUSEHOLD_KEY = 'atlas.household';
+export function getHousehold(): string | null {
+  try {
+    return localStorage.getItem(HOUSEHOLD_KEY);
+  } catch {
+    return null;
+  }
+}
+export function setHousehold(code: string | null): void {
+  try {
+    if (code) localStorage.setItem(HOUSEHOLD_KEY, code);
+    else localStorage.removeItem(HOUSEHOLD_KEY);
+  } catch {
+    /* private mode: link just isn't remembered */
+  }
+}
+export const validHousehold = (c: string): boolean => /^[A-Za-z0-9_-]{12,64}$/.test(c);
+
+export type SyncStatus = 'off' | 'connecting' | 'synced' | 'error';
+let status: SyncStatus = 'off';
+const statusListeners = new Set<() => void>();
+export const getSyncStatus = (): SyncStatus => status;
+export function setSyncStatus(s: SyncStatus): void {
+  status = s;
+  statusListeners.forEach((cb) => cb());
+}
+export function onSyncStatus(cb: () => void): () => void {
+  statusListeners.add(cb);
+  return () => statusListeners.delete(cb);
+}
+
+let stop: (() => void) | null = null;
+
+/** Start (or restart) syncing for the linked household. The SDK loads only now, so an unlinked phone never pays for it. */
+export async function startSyncIfLinked(): Promise<void> {
+  const code = getHousehold();
+  stop?.();
+  stop = null;
+  if (!code) {
+    setSyncStatus('off');
+    return;
+  }
+  setSyncStatus('connecting');
+  try {
+    const { startSync } = await import('../sync');
+    stop = await startSync(code, setSyncStatus);
+  } catch {
+    setSyncStatus('error');
+  }
 }
