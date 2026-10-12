@@ -1,3 +1,4 @@
+import { isNight } from '../theme';
 import { useEffect, useState } from 'react';
 import { STAGE_MAX, STAGE_MIN, stageFor, stageProgress } from '../domain/composition';
 
@@ -30,14 +31,16 @@ const STAGES = Array.from(
 );
 
 function useNightPaper(): boolean {
-  const [night, setNight] = useState(
-    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
-  );
+  const [night, setNight] = useState(isNight);
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const on = () => setNight(mq.matches);
+    const on = () => setNight(isNight());
     mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
+    window.addEventListener('atlas-theme', on);
+    return () => {
+      mq.removeEventListener('change', on);
+      window.removeEventListener('atlas-theme', on);
+    };
   }, []);
   return night;
 }

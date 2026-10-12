@@ -9,6 +9,7 @@ import {
 import { Button } from '../components/Button';
 import { NumberField, parseNum, PushHeader, YesNo } from '../components/Chrome';
 import { SketchBorder, SketchCard } from '../components/Sketch';
+import { getTheme, setTheme, type ThemeChoice } from '../theme';
 import { TimeField } from '../components/TimeField';
 import { useNav } from '../nav';
 import {
@@ -125,6 +126,8 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
       />
       <RampEditor ramp={ramp} onRampChange={onRampChange} />
 
+      <ThemeCard />
+
       <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
         <span className="hand text-[26px]">backup & export</span>
         <p className="caption mt-0.5">
@@ -157,6 +160,44 @@ export function Settings({ ramp, today, onRampChange, onReplayTutorial }: Props)
  * different, and which one matters depends on whether you train with
  * headphones in, with the phone in a pocket, or with the screen locked.
  */
+function ThemeCard() {
+  const [choice, setChoice] = useState<ThemeChoice>(getTheme);
+  const options: { id: ThemeChoice; label: string }[] = [
+    { id: 'auto', label: 'match phone' },
+    { id: 'light', label: 'light' },
+    { id: 'dark', label: 'dark' },
+  ];
+  return (
+    <SketchCard filter="rough2" className="px-4 pt-4 pb-4">
+      <span className="hand text-[26px]">appearance</span>
+      <p className="caption mt-0.5">
+        Light or dark paper. This is just for this phone.
+      </p>
+      <div className="mt-3 flex gap-2">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            onClick={() => {
+              setChoice(o.id);
+              setTheme(o.id);
+            }}
+            aria-pressed={choice === o.id}
+            className="relative flex h-[44px] flex-1 items-center justify-center text-[14px] font-semibold"
+            style={
+              choice === o.id
+                ? { background: 'var(--btn-fill)', color: 'var(--btn-text)', borderRadius: 5 }
+                : { color: 'var(--ink)' }
+            }
+          >
+            {choice !== o.id && <SketchBorder radius={5} strokeWidth={1.8} stroke="var(--rule)" />}
+            <span className="relative">{o.label}</span>
+          </button>
+        ))}
+      </div>
+    </SketchCard>
+  );
+}
+
 function AlarmEditor({ settings }: { settings: AlarmSettings }) {
   const [permission, setPermission] = useState<NotifyPermission>(notifyPermission);
   const [testing, setTesting] = useState(false);
