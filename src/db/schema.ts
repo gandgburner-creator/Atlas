@@ -328,6 +328,8 @@ export interface DuoSession {
   status: 'in_progress' | 'complete';
   startedAt: number;
   endedAt?: number;
+  /** Last local or merged edit; the sync layer's tiebreaker. */
+  updatedAt?: number;
 }
 
 export interface DuoWeight {

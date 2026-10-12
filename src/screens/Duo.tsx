@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Button } from '../components/Button';
 import { NumberField, parseNum } from '../components/Chrome';
@@ -8,8 +8,14 @@ import {
   confirmDuoSet,
   finishDuoSession,
   getDeloadWeeks,
+  getHousehold,
   getPrefs,
   getSeasonStart,
+  getSyncStatus,
+  onSyncStatus,
+  setHousehold,
+  startSyncIfLinked,
+  validHousehold,
   logBodyweight,
   setDuoNote,
   setSeasonStart,
@@ -533,6 +539,69 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ── Sync between phones ───────────────────────────────────────────────────
+
+const STATUS_TEXT = {
+  off: 'Not linked: this phone only.',
+  connecting: 'Connecting… your workouts are saved here either way.',
+  synced: 'Linked and up to date.',
+  error: "Can't reach the shared store right now. Everything is saved on this phone and will send when it can.",
+} as const;
+
+function SyncCard() {
+  const status = useSyncExternalStore(onSyncStatus, getSyncStatus);
+  const [code, setCode] = useState('');
+  const linked = getHousehold();
+  return (
+    <SketchCard filter="rough2" className="px-5 pt-4 pb-4">
+      <span className="hand text-[24px]">sync between phones</span>
+      <p className="caption mt-1">{STATUS_TEXT[status]}</p>
+      {linked ? (
+        <button
+          onClick={() => {
+            setHousehold(null);
+            void startSyncIfLinked();
+          }}
+          className="hand mt-2 text-[17px] text-[var(--ink-muted)] underline"
+        >
+          unlink this phone (keeps all your data)
+        </button>
+      ) : (
+        <>
+          <p className="caption mt-1">
+            Type the same household code on both phones: 12+ letters or numbers, like a password.
+          </p>
+          <div className="mt-2 grid grid-cols-[1fr_auto] items-center gap-3">
+            <div className="relative flex h-[52px] items-center bg-[var(--paper)] px-3 [--field-stroke:var(--ink)] focus-within:[--field-stroke:var(--accent)]">
+              <SketchBorder filter="rough2" radius={4} strokeWidth={2} stroke="var(--field-stroke)" />
+              <input
+                aria-label="household code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.trim())}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="household code"
+                className="relative w-full bg-transparent text-[16px] font-medium outline-none placeholder:text-[var(--ink-faint)]"
+              />
+            </div>
+            <Button
+              disabled={!validHousehold(code)}
+              onClick={() => {
+                setHousehold(code);
+                setCode('');
+                void startSyncIfLinked();
+              }}
+            >
+              Link
+            </Button>
+          </div>
+        </>
+      )}
+    </SketchCard>
+  );
+}
+
 // ── Train home ────────────────────────────────────────────────────────────
 
 function TrainHome({
@@ -657,6 +726,8 @@ function TrainHome({
           </Button>
         </div>
       </SketchCard>
+
+      <SyncCard />
     </div>
   );
 }

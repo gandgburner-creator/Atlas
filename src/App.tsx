@@ -10,7 +10,7 @@ import {
   getTutorialSeen,
   setTutorialSeen,
 } from './db/config';
-import { ensureDuoSeed, getStoredProfile, storeProfile } from './db/duo';
+import { ensureDuoSeed, getStoredProfile, startSyncIfLinked, storeProfile } from './db/duo';
 import { seedFoodDatabase } from './db/foods';
 import { PROFILE_NAME, PROFILES, type Profile } from './domain/duo';
 import { DEFAULT_MODULE_FLAGS, type ModuleFlags } from './domain/commitments';
@@ -255,7 +255,10 @@ export default function App() {
         setRamp(r ?? null);
         setTutorialDone(seen);
       })
-      .finally(() => setLoaded(true));
+      .finally(() => {
+        setLoaded(true);
+        void startSyncIfLinked();
+      });
   }, []);
 
   if (!loaded) return null;
