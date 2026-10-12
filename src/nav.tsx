@@ -16,7 +16,7 @@ import {
  * drive.
  */
 
-export type Tab = 'today' | 'body' | 'food' | 'work' | 'craft' | 'life' | 'progress';
+export type Tab = 'today' | 'body' | 'food' | 'work' | 'craft' | 'life' | 'progress' | 'duo';
 
 export type Route =
   | { name: 'sleep' }
