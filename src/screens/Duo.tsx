@@ -368,6 +368,41 @@ function Clock({ startedAt, running, endedAt }: { startedAt: number; running: bo
   );
 }
 
+/**
+ * Train together: flip between the two profiles without leaving the session.
+ * The other person's session for the same day is opened (or started), so
+ * each keeps their own weights, targets, last-time and score.
+ */
+function WhoToggle({
+  active,
+  onPick,
+}: {
+  active: Profile;
+  onPick: (p: Profile) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2" role="group" aria-label="logging for">
+      <span className="annot">logging for</span>
+      {PROFILES.map((p) => (
+        <button
+          key={p}
+          onClick={() => p !== active && onPick(p)}
+          aria-pressed={p === active}
+          className="relative px-3.5 py-2 text-[15px] font-semibold"
+          style={
+            p === active
+              ? { background: COLOR[p], color: 'var(--btn-text)', borderRadius: 999 }
+              : { color: 'var(--ink)' }
+          }
+        >
+          {p !== active && <SketchBorder radius={999} strokeWidth={1.8} stroke={COLOR[p]} />}
+          <span className="relative">{PROFILE_NAME[p]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SessionView({
   session,
   profile,
@@ -377,6 +412,8 @@ function SessionView({
   deloadWeeks,
   onBack,
   onLogged,
+  onSwitch,
+  today,
 }: {
   session: DuoSession;
   profile: Profile;
@@ -386,8 +423,14 @@ function SessionView({
   deloadWeeks: string[];
   onBack: () => void;
   onLogged: (name: string, rest: number) => void;
+  onSwitch: (p: Profile, key: string) => void;
+  today: string;
 }) {
   const deload = deloadWeeks.includes(session.weekStart);
+  async function switchTo(p: Profile) {
+    const other = await startDuoSession(p, session.weekStart, session.day, today, deload);
+    onSwitch(p, other.key);
+  }
   const hist = useMemo(
     () => buildHistory(profile, sessions, legacy, session.key, session.bodyweight),
     [profile, sessions, legacy, session.key, session.bodyweight],
@@ -404,6 +447,7 @@ function SessionView({
     const prs = sessionPrCount(session, hist);
     return (
       <div className="flex flex-col gap-4">
+        <WhoToggle active={profile} onPick={(p) => void switchTo(p)} />
         <SketchCard className="px-5 pt-4 pb-5">
           <span className="hand text-[28px]">{day.title}: done</span>
           <div className="mt-3 grid grid-cols-2 gap-3">
@@ -430,6 +474,7 @@ function SessionView({
         </button>
         <Clock startedAt={session.startedAt} running endedAt={undefined} />
       </div>
+      <WhoToggle active={profile} onPick={(p) => void switchTo(p)} />
       <div>
         <span className="hand text-[30px] leading-none">{day.title}</span>
         <p className="caption">
@@ -822,7 +867,11 @@ function ProgressView({
 
 // ── The screen ────────────────────────────────────────────────────────────
 
-export function DuoScreen({ today, profile }: { today: string; profile: Profile }) {
+export function DuoScreen({ today, profile: devProfile }: { today: string; profile: Profile }) {
+  // Who is being logged right now. Starts as this phone's profile, and the
+  // in-session toggle can move it so both can be logged from one phone.
+  const [profile, setProfile] = useState<Profile>(devProfile);
+  useEffect(() => setProfile(devProfile), [devProfile]);
   const [view, setView] = useState<View>('train');
   const [openKey, setOpenKey] = useState<string | null>(null);
   const restTimer = useRestTimer();
@@ -834,8 +883,6 @@ export function DuoScreen({ today, profile }: { today: string; profile: Profile 
   const seasonStart = useLiveQuery(getSeasonStart, [], '2026-10-19');
 
   const open = openKey ? sessions.find((s) => s.key === openKey) : undefined;
-  // Switching profile mid-session must not carry the other person's session over.
-  useEffect(() => setOpenKey(null), [profile]);
 
   const scope = { ['--p-ghaith']: 'var(--accent)', ['--p-gaby']: 'var(--success)' } as CSSProperties;
   const mine = { ['--accent']: `var(--p-${profile})` } as CSSProperties;
@@ -870,6 +917,11 @@ export function DuoScreen({ today, profile }: { today: string; profile: Profile 
             deloadWeeks={deloadWeeks}
             onBack={() => setOpenKey(null)}
             onLogged={(n, rest) => restTimer.start(n, rest)}
+            today={today}
+            onSwitch={(p, key) => {
+              setProfile(p);
+              setOpenKey(key);
+            }}
           />
         ) : view === 'train' ? (
           <TrainHome profile={profile} today={today} sessions={sessions} deloadWeeks={deloadWeeks} onOpen={setOpenKey} />
