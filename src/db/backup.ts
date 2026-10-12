@@ -8,6 +8,8 @@ import {
   type InBodyReading,
   type Letter,
   type LifeLog,
+  type DuoSession,
+  type DuoWeight,
   type Plate,
   type SleepLog,
   type WeightLog,
@@ -29,7 +31,7 @@ import {
  * upgrade hook ever sees them. Without it, restoring an old backup would
  * put the drift straight back.
  */
-export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION = 3;
 
 export interface PhotoBackup {
   id?: number;
@@ -61,6 +63,9 @@ export interface AtlasBackup {
   config: ConfigEntry[];
   foodItems: FoodItem[];
   plates: Plate[];
+  /** Absent on backups made before the two-person program. */
+  duoSessions?: DuoSession[];
+  duoWeights?: DuoWeight[];
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -103,6 +108,8 @@ export async function buildBackup(includePhotos: boolean): Promise<AtlasBackup> 
     config,
     foodItems,
     plates,
+    duoSessions,
+    duoWeights,
   ] = await Promise.all([
     db.sleepLogs.toArray(),
     db.weightLogs.toArray(),
@@ -117,6 +124,8 @@ export async function buildBackup(includePhotos: boolean): Promise<AtlasBackup> 
     db.config.toArray(),
     db.foodItems.toArray(),
     db.plates.toArray(),
+    db.duoSessions.toArray(),
+    db.duoWeights.toArray(),
   ]);
 
   const photos: PhotoBackup[] = includePhotos
@@ -148,6 +157,8 @@ export async function buildBackup(includePhotos: boolean): Promise<AtlasBackup> 
     config,
     foodItems,
     plates,
+    duoSessions,
+    duoWeights,
   };
 }
 
@@ -220,6 +231,8 @@ export async function restoreBackup(input: AtlasBackup): Promise<void> {
       db.config,
       db.foodItems,
       db.plates,
+      db.duoSessions,
+      db.duoWeights,
     ],
     async () => {
       await Promise.all([
@@ -236,6 +249,8 @@ export async function restoreBackup(input: AtlasBackup): Promise<void> {
         db.config.clear(),
         db.foodItems.clear(),
         db.plates.clear(),
+        db.duoSessions.clear(),
+        db.duoWeights.clear(),
       ]);
 
       await Promise.all([
@@ -252,6 +267,8 @@ export async function restoreBackup(input: AtlasBackup): Promise<void> {
         // Absent on a backup made before the food rebuild — restore what exists.
         db.foodItems.bulkAdd(data.foodItems ?? []),
         db.plates.bulkAdd(data.plates ?? []),
+        db.duoSessions.bulkAdd(data.duoSessions ?? []),
+        db.duoWeights.bulkAdd(data.duoWeights ?? []),
       ]);
 
       if (data.photosIncluded && data.photos.length > 0) {

@@ -10,7 +10,9 @@ import {
   getTutorialSeen,
   setTutorialSeen,
 } from './db/config';
+import { ensureDuoSeed, getStoredProfile, storeProfile } from './db/duo';
 import { seedFoodDatabase } from './db/foods';
+import { PROFILE_NAME, PROFILES, type Profile } from './domain/duo';
 import { DEFAULT_MODULE_FLAGS, type ModuleFlags } from './domain/commitments';
 import type { RampConfig } from './domain/ramp';
 import { todayISO } from './domain/time';
@@ -20,7 +22,9 @@ import { CraftScreen } from './screens/Craft';
 import { ExportScreen } from './screens/Export';
 import { FoodScreen } from './screens/Food';
 import { FoodEditorScreen } from './screens/FoodEditor';
+import { DuoScreen } from './screens/Duo';
 import { Home } from './screens/Home';
+import { ProfileGate } from './screens/ProfileGate';
 import { PlateEditorScreen } from './screens/PlateEditor';
 import { InBodyDetail, InBodyForm } from './screens/InBody';
 import { LifeScreen } from './screens/Life';
@@ -70,19 +74,46 @@ const TABS: TabDef[] = [
   { id: 'today', icon: 'home', label: 'today' },
   { id: 'body', icon: 'body', label: 'body' },
   { id: 'food', icon: 'food', label: 'food' },
+  { id: 'duo', icon: 'lift', label: 'train' },
   { id: 'work', icon: 'work', label: 'work', module: 'work' },
   { id: 'craft', icon: 'craft', label: 'craft', module: 'craft' },
   { id: 'life', icon: 'life', label: 'life', module: 'life' },
   { id: 'progress', icon: 'board', label: 'progress' },
 ];
 
+/** Quick switch between the two people, shown on every screen. */
+function ProfileSwitch({ profile, onChange }: { profile: Profile; onChange: (p: Profile) => void }) {
+  return (
+    <div className="flex items-center justify-end gap-1 pt-2" role="group" aria-label="profile">
+      {PROFILES.map((p) => (
+        <button
+          key={p}
+          onClick={() => onChange(p)}
+          aria-pressed={p === profile}
+          className="hand px-3 py-1 text-[17px]"
+          style={{
+            color: p === profile ? 'var(--ink)' : 'var(--ink-faint)',
+            textDecoration: p === profile ? 'underline' : 'none',
+          }}
+        >
+          {PROFILE_NAME[p]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Shell({
   ramp,
   today,
+  profile,
+  onProfile,
   onRampChange,
   onReplayTutorial,
 }: {
   ramp: RampConfig;
+  profile: Profile;
+  onProfile: (p: Profile) => void;
   today: string;
   onRampChange: (r: RampConfig) => void;
   onReplayTutorial: () => void;
@@ -99,12 +130,16 @@ function Shell({
 
   // Live so a flag flipped in Settings hides/shows tabs immediately.
   const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
-  const visibleTabs = TABS.filter((t) => !t.module || moduleFlags[t.module]);
+  // Gaby sees Training only; everything else in Atlas is Ghaith's.
+  const visibleTabs =
+    profile === 'gaby'
+      ? TABS.filter((t) => t.id === 'duo')
+      : TABS.filter((t) => !t.module || moduleFlags[t.module]);
 
   // A tab switched off from under the user (Settings, another tab) lands
   // them back on Today rather than showing a bottom nav with no selection.
   useEffect(() => {
-    if (!visibleTabs.some((t) => t.id === nav.tab)) nav.setTab('today');
+    if (!visibleTabs.some((t) => t.id === nav.tab)) nav.setTab(visibleTabs[0]?.id ?? 'today');
   }, [visibleTabs, nav]);
 
   const pushed = nav.top;
@@ -112,7 +147,10 @@ function Shell({
   return (
     <div className="mx-auto flex min-h-dvh max-w-[390px] flex-col px-5">
       <main className="pt-safe flex-1 pb-8">
-        {pushed ? (
+        {!pushed && <ProfileSwitch profile={profile} onChange={onProfile} />}
+        {profile === 'gaby' ? (
+          <DuoScreen today={today} profile="gaby" />
+        ) : pushed ? (
           pushed.name === 'sleep' ? (
             <div>
               <PushHeader title="sleep" />
@@ -146,6 +184,8 @@ function Shell({
           )
         ) : nav.tab === 'today' ? (
           <Home ramp={ramp} today={today} />
+        ) : nav.tab === 'duo' ? (
+          <DuoScreen today={today} profile="ghaith" />
         ) : nav.tab === 'body' ? (
           <BodyScreen today={today} moduleFlags={moduleFlags} />
         ) : nav.tab === 'food' ? (
@@ -163,7 +203,7 @@ function Shell({
 
       {/* Bottom nav: active modules only — hidden ones stay off until
           switched back on in settings, never deleted. */}
-      {!pushed && (
+      {!pushed && profile !== 'gaby' && (
         <nav className="pb-safe sticky bottom-0 flex bg-[var(--board)] pt-2">
           {visibleTabs.map((t) => {
             const on = nav.tab === t.id;
@@ -202,12 +242,18 @@ export default function App() {
   const [ramp, setRamp] = useState<RampConfig | null>(null);
   const [tutorialDone, setTutorialDone] = useState(true);
   const [loaded, setLoaded] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(getStoredProfile);
   const today = useToday();
+
+  function chooseProfile(p: Profile) {
+    storeProfile(p);
+    setProfile(p);
+  }
 
   useEffect(() => {
     // cleanupEmptySessions runs before anything renders, so it can never
     // race a session the user is actually in the middle of logging.
-    Promise.all([getRamp(), getTutorialSeen(), seedFoodDatabase(), cleanupEmptySessions()])
+    Promise.all([getRamp(), getTutorialSeen(), seedFoodDatabase(), cleanupEmptySessions(), ensureDuoSeed()])
       .then(([r, seen]) => {
         setRamp(r ?? null);
         setTutorialDone(seen);
@@ -224,7 +270,9 @@ export default function App() {
 
   // First run reads: intro → set the ramp → the app. Replaying the intro from
   // Settings drops back in here and lands on the app, since the ramp exists.
-  const screen = !tutorialDone ? (
+  const screen = !profile ? (
+    <ProfileGate onPick={chooseProfile} />
+  ) : profile === 'gaby' ? null : !tutorialDone ? (
     <Tutorial onDone={finishTutorial} />
   ) : !ramp ? (
     <Onboarding onReady={setRamp} />
@@ -240,6 +288,8 @@ export default function App() {
       ) : (
         <Shell
           ramp={ramp as RampConfig}
+          profile={profile as Profile}
+          onProfile={chooseProfile}
           today={today}
           onRampChange={setRamp}
           onReplayTutorial={() => setTutorialDone(false)}

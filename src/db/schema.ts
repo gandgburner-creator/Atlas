@@ -289,6 +289,56 @@ export interface CraftItem {
   updatedAt: number;
 }
 
+// ── Two-person program ───────────────────────────────────────────────────
+
+export interface DuoSet {
+  weight: number;
+  reps: number;
+  /** Epoch ms. Present = confirmed (and scored). */
+  confirmedAt: number;
+}
+
+export interface DuoExercise {
+  /** Program slot, e.g. 'mon-1'. */
+  slotId: string;
+  /** What was actually done, including a swap. */
+  name: string;
+  sets: (DuoSet | null)[];
+}
+
+/**
+ * One session. The key is deterministic (profile:weekStart:day) so the same
+ * session written on two devices is the same record, which is what lets a
+ * shared store merge cleanly later.
+ */
+export interface DuoSession {
+  key: string;
+  profile: 'ghaith' | 'gaby';
+  /** Monday of the week it counts toward. */
+  weekStart: ISODate;
+  /** Which of the week's five sessions this is, not which weekday it was done. */
+  day: 'mon' | 'tue' | 'wed' | 'thu' | 'sat';
+  /** Local date it was actually done. */
+  date: ISODate;
+  /** Latest log on or before `date`, frozen so past weeks never change. */
+  bodyweight: number;
+  exercises: DuoExercise[];
+  note?: string;
+  deload: boolean;
+  status: 'in_progress' | 'complete';
+  startedAt: number;
+  endedAt?: number;
+}
+
+export interface DuoWeight {
+  /** profile:date */
+  key: string;
+  profile: 'ghaith' | 'gaby';
+  date: ISODate;
+  kg: number;
+  updatedAt: number;
+}
+
 // ── Config ────────────────────────────────────────────────────────────────
 
 /**
@@ -316,6 +366,8 @@ export class AtlasDB extends Dexie {
   config!: EntityTable<ConfigEntry, 'key'>;
   foodItems!: EntityTable<FoodItem, 'id'>;
   plates!: EntityTable<Plate, 'id'>;
+  duoSessions!: EntityTable<DuoSession, 'key'>;
+  duoWeights!: EntityTable<DuoWeight, 'key'>;
 
   constructor() {
     super('atlas');
@@ -384,6 +436,11 @@ export class AtlasDB extends Dexie {
             if (row.status === undefined) row.status = 'complete';
           });
       });
+    // v6: the two-person program. Two new tables, nothing existing touched.
+    this.version(6).stores({
+      duoSessions: 'key, profile, weekStart',
+      duoWeights: 'key, profile, date',
+    });
   }
 }
 
