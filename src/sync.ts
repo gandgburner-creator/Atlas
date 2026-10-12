@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { collection, doc, getFirestore, onSnapshot, setDoc, type Firestore } from 'firebase/firestore';
+import { collection, doc, initializeFirestore, onSnapshot, setDoc, type Firestore } from 'firebase/firestore';
 import { applySharedConfig, getOwner, getSharedConfig, onDuoChange, type SyncStatus } from './db/duo';
 import { db, type DuoSession, type DuoWeight, type WeightLog } from './db/schema';
 import { canon, hasConfirmedSets, mergeSession } from './domain/duo';
@@ -39,7 +39,9 @@ export async function startSync(
 ): Promise<() => void> {
   const app = initializeApp(CONFIG, `atlas-${code}`);
   await signInAnonymously(getAuth(app));
-  const fs: Firestore = getFirestore(app);
+  // Auto-detect long polling so networks and proxies that break Firestore's
+  // streaming connection still work.
+  const fs: Firestore = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
   const base = `households/${code}`;
   const owner = getOwner();
   const unsubs: (() => void)[] = [];
