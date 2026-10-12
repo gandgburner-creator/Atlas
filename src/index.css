@@ -104,8 +104,9 @@
   color-scheme: light;
 }
 
+/* Follow the phone unless the user has chosen light in Settings. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --paper: var(--color-night-card);
     --board: var(--color-night-board);
     --ink: var(--color-cream);
@@ -122,6 +123,25 @@
     --shadow-btn: rgba(0, 0, 0, 0.45);
     color-scheme: dark;
   }
+}
+
+/* Chosen dark in Settings, whatever the phone says. */
+:root[data-theme='dark'] {
+  --paper: var(--color-night-card);
+  --board: var(--color-night-board);
+  --ink: var(--color-cream);
+  --ink-muted: var(--color-cream-muted);
+  --ink-faint: var(--color-cream-muted);
+  --rule: #6b5c48;
+  --grid: #6b5c48;
+  --accent: #e8674b;
+  --success: #8fbf7a;
+  --btn-fill: var(--color-cream);
+  --btn-text: var(--color-night-board);
+  --sunk: #3a3128;
+  --shadow: rgba(0, 0, 0, 0.45);
+  --shadow-btn: rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
 }
 
 html {
