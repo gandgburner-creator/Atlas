@@ -130,16 +130,14 @@ function Shell({
 
   // Live so a flag flipped in Settings hides/shows tabs immediately.
   const moduleFlags = useLiveQuery(getModuleFlags, [], DEFAULT_MODULE_FLAGS);
-  // Gaby sees Training only; everything else in Atlas is Ghaith's.
-  const visibleTabs =
-    profile === 'gaby'
-      ? TABS.filter((t) => t.id === 'duo')
-      : TABS.filter((t) => !t.module || moduleFlags[t.module]);
+  // Every phone is a full Atlas for its owner (sleep, work, food and the
+  // rest stay private to that phone). Only the couple workout is shared.
+  const visibleTabs = TABS.filter((t) => !t.module || moduleFlags[t.module]);
 
   // A tab switched off from under the user (Settings, another tab) lands
   // them back on Today rather than showing a bottom nav with no selection.
   useEffect(() => {
-    if (!visibleTabs.some((t) => t.id === nav.tab)) nav.setTab(visibleTabs[0]?.id ?? 'today');
+    if (!visibleTabs.some((t) => t.id === nav.tab)) nav.setTab('today');
   }, [visibleTabs, nav]);
 
   const pushed = nav.top;
@@ -148,9 +146,7 @@ function Shell({
     <div className="mx-auto flex min-h-dvh max-w-[390px] flex-col px-5">
       <main className="pt-safe flex-1 pb-8">
         {!pushed && <ProfileSwitch profile={profile} onChange={onProfile} />}
-        {profile === 'gaby' ? (
-          <DuoScreen today={today} profile="gaby" />
-        ) : pushed ? (
+        {pushed ? (
           pushed.name === 'sleep' ? (
             <div>
               <PushHeader title="sleep" />
@@ -185,7 +181,7 @@ function Shell({
         ) : nav.tab === 'today' ? (
           <Home ramp={ramp} today={today} />
         ) : nav.tab === 'duo' ? (
-          <DuoScreen today={today} profile="ghaith" />
+          <DuoScreen today={today} profile={profile} />
         ) : nav.tab === 'body' ? (
           <BodyScreen today={today} moduleFlags={moduleFlags} />
         ) : nav.tab === 'food' ? (
@@ -203,7 +199,7 @@ function Shell({
 
       {/* Bottom nav: active modules only — hidden ones stay off until
           switched back on in settings, never deleted. */}
-      {!pushed && profile !== 'gaby' && (
+      {!pushed && (
         <nav className="pb-safe sticky bottom-0 flex bg-[var(--board)] pt-2">
           {visibleTabs.map((t) => {
             const on = nav.tab === t.id;
@@ -248,6 +244,7 @@ export default function App() {
   function chooseProfile(p: Profile) {
     storeProfile(p);
     setProfile(p);
+    void ensureDuoSeed();
   }
 
   useEffect(() => {
@@ -272,7 +269,7 @@ export default function App() {
   // Settings drops back in here and lands on the app, since the ramp exists.
   const screen = !profile ? (
     <ProfileGate onPick={chooseProfile} />
-  ) : profile === 'gaby' ? null : !tutorialDone ? (
+  ) : !tutorialDone ? (
     <Tutorial onDone={finishTutorial} />
   ) : !ramp ? (
     <Onboarding onReady={setRamp} />

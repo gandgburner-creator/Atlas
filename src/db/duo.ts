@@ -29,8 +29,26 @@ export function getStoredProfile(): Profile | null {
   }
 }
 
+const OWNER_KEY = 'atlas.owner';
+
+/**
+ * Whose phone this is, fixed the first time a profile is chosen. The phone's
+ * own weight log (the one Atlas already has) belongs to the owner; the other
+ * person, when logged from this phone, keeps theirs in duoWeights.
+ */
+export function getOwner(): Profile {
+  try {
+    const v = localStorage.getItem(OWNER_KEY);
+    if (v === 'ghaith' || v === 'gaby') return v;
+  } catch {
+    /* fall through */
+  }
+  return getStoredProfile() ?? 'ghaith';
+}
+
 export function storeProfile(p: Profile): void {
   try {
+    if (!localStorage.getItem(OWNER_KEY)) localStorage.setItem(OWNER_KEY, p);
     localStorage.setItem(PROFILE_KEY, p);
   } catch {
     /* private mode: the choice just isn't remembered */
@@ -44,23 +62,26 @@ export function storeProfile(p: Profile): void {
  * duoWeights. Seeds are idempotent (fixed keys), so a double effect is safe.
  */
 export async function ensureDuoSeed(): Promise<void> {
+  if (!getStoredProfile()) return; // nobody chosen yet; seeded right after the gate
+  const owner = getOwner();
+  const other: Profile = owner === 'ghaith' ? 'gaby' : 'ghaith';
   await db.transaction('rw', db.weightLogs, db.duoWeights, async () => {
     if ((await db.weightLogs.count()) === 0) {
       const now = Date.now();
-      await db.weightLogs.put({ date: SEED_DATE, kg: SEED_BODYWEIGHT.ghaith, createdAt: now, updatedAt: now });
+      await db.weightLogs.put({ date: SEED_DATE, kg: SEED_BODYWEIGHT[owner], createdAt: now, updatedAt: now });
     }
-    const k = `gaby:${SEED_DATE}`;
+    const k = `${other}:${SEED_DATE}`;
     if (!(await db.duoWeights.get(k))) {
-      await db.duoWeights.put({ key: k, profile: 'gaby', date: SEED_DATE, kg: SEED_BODYWEIGHT.gaby, updatedAt: Date.now() });
+      await db.duoWeights.put({ key: k, profile: other, date: SEED_DATE, kg: SEED_BODYWEIGHT[other], updatedAt: Date.now() });
     }
   });
 }
 
 export async function weightSeries(p: Profile): Promise<{ date: ISODate; kg: number }[]> {
-  if (p === 'ghaith') {
+  if (p === getOwner()) {
     return (await db.weightLogs.orderBy('date').toArray()).map((w) => ({ date: w.date, kg: w.kg }));
   }
-  return (await db.duoWeights.where('profile').equals('gaby').sortBy('date')).map((w) => ({ date: w.date, kg: w.kg }));
+  return (await db.duoWeights.where('profile').equals(p).sortBy('date')).map((w) => ({ date: w.date, kg: w.kg }));
 }
 
 /** Latest log on or before `date`; before the first log, the first log. */
@@ -74,11 +95,11 @@ export async function bodyweightOn(p: Profile, date: ISODate): Promise<number> {
 
 export async function logBodyweight(p: Profile, date: ISODate, kg: number): Promise<void> {
   const now = Date.now();
-  if (p === 'ghaith') {
+  if (p === getOwner()) {
     const existing = await db.weightLogs.get(date);
     await db.weightLogs.put({ date, kg, createdAt: existing?.createdAt ?? now, updatedAt: now });
   } else {
-    await db.duoWeights.put({ key: `gaby:${date}`, profile: 'gaby', date, kg, updatedAt: now } as DuoWeight);
+    await db.duoWeights.put({ key: `${p}:${date}`, profile: p, date, kg, updatedAt: now } as DuoWeight);
   }
 }
 
