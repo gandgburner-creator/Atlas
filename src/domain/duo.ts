@@ -138,6 +138,8 @@ export interface DuoPrefs {
   swaps: Record<string, string>;
   steps: Record<string, number>;
   rests: Record<string, number>;
+  /** Last edit, so two phones can agree on which copy is newer. */
+  updatedAt?: number;
 }
 export const EMPTY_PREFS: DuoPrefs = { swaps: {}, steps: {}, rests: {} };
 
@@ -251,7 +253,7 @@ export function sessionStats(s: DuoSession, deload: boolean): SessionStats {
 // ── History, last time, targets, PRs ──────────────────────────────────────
 
 export interface HistSet { weight: number; reps: number; load: number }
-export interface HistEntry { date: ISODate; name: string; sets: HistSet[] }
+export interface HistEntry { date: ISODate; name: string; sets: HistSet[]; slotId?: string }
 
 const norm = (n: string) => n.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -321,6 +323,7 @@ export function buildHistory(
       out.push({
         date: s.date,
         name: ex.name,
+        slotId: ex.slotId,
         sets: sets.map((x) => ({ weight: x.weight, reps: x.reps, load: loadOf(x.weight, bw, s.bodyweight) })),
       });
     }
@@ -346,6 +349,17 @@ export function buildHistory(
 
 export function lastTime(hist: HistEntry[], name: string): HistEntry | undefined {
   for (let i = hist.length - 1; i >= 0; i--) if (hist[i]!.name === name) return hist[i];
+  return undefined;
+}
+
+/**
+ * The previous time this program slot was done, whatever the exercise was
+ * called. Backs up lastTime: when a swap isn't on this phone (swaps are kept
+ * per phone) or was changed since, an exact-name match finds nothing even
+ * though the slot was trained, and "first time" would be wrong.
+ */
+export function lastForSlot(hist: HistEntry[], slotId: string): HistEntry | undefined {
+  for (let i = hist.length - 1; i >= 0; i--) if (hist[i]!.slotId === slotId) return hist[i];
   return undefined;
 }
 

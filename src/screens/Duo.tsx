@@ -37,6 +37,7 @@ import {
   EMPTY_PREFS,
   epley,
   isPr,
+  lastForSlot,
   lastTime,
   nextSeasonStart,
   PROFILE_NAME,
@@ -259,8 +260,15 @@ function ExerciseBlock({
   const ex = session.exercises.find((e) => e.slotId === r.slotId);
   const sets = ex?.sets ?? [];
   const planned = deload ? Math.ceil(r.sets / 2) : r.sets;
-  const last = lastTime(hist, r.name);
-  const target = targetFor(last, r);
+  const exact = lastTime(hist, r.name);
+  // Same slot, different exercise (a swap that isn't on this phone, or was
+  // changed): show it for reference, but don't project a target from a
+  // different movement's weights.
+  const viaSlot = exact ? undefined : lastForSlot(hist, r.slotId);
+  const last = exact ?? viaSlot;
+  const target = viaSlot
+    ? { weight: null, label: `new variation. Last time was ${viaSlot.name}` }
+    : targetFor(exact, r);
   const anyDone = sets.some(Boolean);
   const lastLoaded = [...sets].reverse().find(Boolean);
   const prefill = lastLoaded ? String(lastLoaded.weight) : target.weight !== null ? String(target.weight) : '';
@@ -329,6 +337,7 @@ function ExerciseBlock({
         <span className="annot">last time</span>
         <p className="tnum mt-0.5 text-[16px] font-semibold leading-snug">
           {last ? last.sets.map((s) => `${s.weight}×${s.reps}`).join('  ·  ') : 'first time'}
+          {viaSlot && <span className="caption block font-medium">{viaSlot.name}</span>}
         </p>
         <span className="annot mt-1 block">today's target</span>
         <p className="tnum text-[16px] font-semibold">{target.label}</p>

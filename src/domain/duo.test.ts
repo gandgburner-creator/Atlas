@@ -3,7 +3,7 @@ import type { DuoSession, DuoSet } from '../db/schema';
 import {
   buildHistory, buildSeason, canonicalName, dayKeyFor, dayPlannedSets, DAY_KEYS, DUO_PROGRAM,
   epley, isPr, lastTime, nextSeasonStart, plannedSets, resolveSlot, sessionKey, sessionStats,
-  canon, mergeSession, targetFor, weekPlannedSets, weekScore, weekStartFor, weekWinner, EMPTY_PREFS, type DayKey, type Profile,
+  canon, lastForSlot, mergeSession, targetFor, weekPlannedSets, weekScore, weekStartFor, weekWinner, EMPTY_PREFS, type DayKey, type Profile,
 } from './duo';
 import { toISODate } from './time';
 
@@ -236,5 +236,21 @@ describe('merging two copies of a session (sync)', () => {
   });
   it('compares records regardless of key order or undefined fields', () => {
     expect(canon({ a: 1, b: [1, { c: 2, d: undefined }] })).toBe(canon({ b: [1, { c: 2 }], a: 1 }));
+  });
+});
+
+describe('last time survives a swap that is not on this phone', () => {
+  it('finds the previous session of the same slot under another exercise name', () => {
+    const thu = sess('gaby', W1, 'thu', 'all');
+    // Logged as the swapped exercise, e.g. on the other phone.
+    thu.exercises[1] = { slotId: 'thu-2', name: 'Machine Chest Press', sets: [set(40, 8), set(40, 8), set(40, 8)] };
+    const hist = buildHistory('gaby', [thu], [], undefined, 49);
+    expect(lastTime(hist, 'Bench Press')).toBeUndefined(); // the exact-name lookup misses it
+    expect(lastForSlot(hist, 'thu-2')?.name).toBe('Machine Chest Press');
+    expect(lastForSlot(hist, 'thu-2')?.sets[0]?.weight).toBe(40);
+  });
+  it("never borrows another person's history", () => {
+    const g = sess('ghaith', W1, 'thu', 'all');
+    expect(lastForSlot(buildHistory('gaby', [g], [], undefined, 49), 'thu-2')).toBeUndefined();
   });
 });
