@@ -202,7 +202,17 @@ const prefsKey = (p: Profile) => `duoPrefs:${p}`;
 export async function getPrefs(p: Profile): Promise<DuoPrefs> {
   const row = await db.config.get(prefsKey(p));
   const v = (row?.value ?? {}) as Partial<DuoPrefs>;
-  return { ...EMPTY_PREFS, swaps: v.swaps ?? {}, steps: v.steps ?? {}, rests: v.rests ?? {} };
+  return { ...EMPTY_PREFS, swaps: v.swaps ?? {}, steps: v.steps ?? {}, rests: v.rests ?? {}, updatedAt: v.updatedAt };
+}
+
+/** Another phone's preferences, if newer. Does not fire a change event. */
+export async function applyPrefs(p: Profile, remote: DuoPrefs): Promise<void> {
+  await db.transaction('rw', db.config, async () => {
+    const row = await db.config.get(prefsKey(p));
+    const local = (row?.value ?? {}) as Partial<DuoPrefs>;
+    if ((remote.updatedAt ?? 0) <= (local.updatedAt ?? 0)) return;
+    await db.config.put({ key: prefsKey(p), value: remote });
+  });
 }
 
 export function updatePrefs(p: Profile, fn: (x: DuoPrefs) => DuoPrefs): Promise<void> {
@@ -210,8 +220,8 @@ export function updatePrefs(p: Profile, fn: (x: DuoPrefs) => DuoPrefs): Promise<
     const row = await db.config.get(prefsKey(p));
     const v = (row?.value ?? {}) as Partial<DuoPrefs>;
     const cur: DuoPrefs = { swaps: v.swaps ?? {}, steps: v.steps ?? {}, rests: v.rests ?? {} };
-    await db.config.put({ key: prefsKey(p), value: fn(cur) });
-  });
+    await db.config.put({ key: prefsKey(p), value: { ...fn(cur), updatedAt: Date.now() } });
+  }).then(changed);
 }
 
 export async function getDeloadWeeks(): Promise<string[]> {

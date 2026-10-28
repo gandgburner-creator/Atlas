@@ -1,9 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { collection, doc, initializeFirestore, onSnapshot, setDoc, type Firestore } from 'firebase/firestore';
-import { applySharedConfig, getOwner, getSharedConfig, onDuoChange, type SyncStatus } from './db/duo';
+import { applyPrefs, applySharedConfig, getOwner, getPrefs, getSharedConfig, onDuoChange, type SyncStatus } from './db/duo';
 import { db, type DuoSession, type DuoWeight, type WeightLog } from './db/schema';
-import { canon, hasConfirmedSets, mergeSession } from './domain/duo';
+import { canon, hasConfirmedSets, mergeSession, PROFILES, type DuoPrefs, type Profile } from './domain/duo';
 
 /**
  * Shared store for the couple workout.
@@ -69,6 +69,11 @@ export async function startSync(
           }),
         ),
       ]);
+      // Swaps, rests and steps, so the same exercise names show on both phones.
+      for (const p of PROFILES) {
+        const prefs = await getPrefs(p);
+        if (prefs.updatedAt) await setDoc(doc(fs, `${base}/prefs/${p}`), clean(prefs));
+      }
       const cfg = await getSharedConfig();
       if (cfg) await setDoc(doc(fs, `${base}/config/shared`), clean(cfg));
     } catch {
@@ -120,6 +125,15 @@ export async function startSync(
           const l = await db.duoWeights.get(key);
           if (!l || r.updatedAt > l.updatedAt) await db.duoWeights.put({ key, profile: r.profile, date: r.date, kg: r.kg, updatedAt: r.updatedAt });
         }
+      }
+    }),
+  );
+
+  unsubs.push(
+    onSnapshot(collection(fs, `${base}/prefs`), async (snap) => {
+      for (const ch of snap.docChanges()) {
+        const who = ch.doc.id as Profile;
+        if (PROFILES.includes(who)) await applyPrefs(who, ch.doc.data() as DuoPrefs);
       }
     }),
   );
