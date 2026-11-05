@@ -19,12 +19,16 @@ import {
   logBodyweight,
   setDuoNote,
   setSeasonStart,
+  deleteTemplate,
+  getTemplates,
+  startCustomSession,
   startDuoSession,
+  type WorkoutTemplate,
   toggleDeload,
   updatePrefs,
   weightSeries,
 } from '../db/duo';
-import { db, type DuoSession, type DuoSet } from '../db/schema';
+import { db, type DuoCustomSlot, type DuoSession, type DuoSet } from '../db/schema';
 import {
   bestE1rm,
   buildHistory,
@@ -37,6 +41,7 @@ import {
   EMPTY_PREFS,
   epley,
   isPr,
+  planOf,
   lastForSlot,
   lastTime,
   nextSeasonStart,
@@ -57,6 +62,7 @@ import {
   type ResolvedSlot,
 } from '../domain/duo';
 import { formatDayLabel } from '../domain/time';
+import { CustomBuilder, HitChart } from './DuoCustom';
 import { RestBar, useRestTimer } from './TrainingShared';
 
 type View = 'train' | 'challenge' | 'progress';
@@ -441,9 +447,15 @@ function SessionView({
   onSwitch: (p: Profile, key: string) => void;
   today: string;
 }) {
-  const deload = deloadWeeks.includes(session.weekStart);
+  const isCustom = session.day === 'custom';
+  // A custom workout is exactly the sets chosen, whatever the week.
+  const deload = !isCustom && deloadWeeks.includes(session.weekStart);
+  const [showChart, setShowChart] = useState(false);
   async function switchTo(p: Profile) {
-    const other = await startDuoSession(p, session.weekStart, session.day, today, deload);
+    const other =
+      session.day === 'custom'
+        ? await startCustomSession(p, session.weekStart, today, session.customName ?? '', session.customPlan ?? [], session.key.split(':')[3])
+        : await startDuoSession(p, session.weekStart, session.day, today, deload);
     onSwitch(p, other.key);
   }
   const hist = useMemo(
@@ -451,7 +463,7 @@ function SessionView({
     [profile, sessions, legacy, session.key, session.bodyweight],
   );
   const [note, setNote] = useState(session.note ?? '');
-  const day = DUO_PROGRAM[session.day];
+  const day = planOf(session);
   const stats = sessionStats(session, deload);
   const finished = session.status === 'complete';
 
@@ -468,7 +480,7 @@ function SessionView({
           <div className="mt-3 grid grid-cols-2 gap-3">
             <Stat label="sets" value={`${stats.done}/${stats.planned}`} />
             <Stat label="volume kg" value={fmt(stats.volume)} />
-            <Stat label="points" value={`+${pts}`} />
+            <Stat label="points" value={isCustom ? 'extra' : `+${pts}`} />
             <Stat label="PRs" value={String(prs)} />
           </div>
           <p className="mt-3 text-[16px]">
@@ -476,6 +488,7 @@ function SessionView({
           </p>
           {session.note && <p className="caption mt-2">“{session.note}”</p>}
         </SketchCard>
+        {isCustom && <HitChart plan={session.customPlan ?? []} />}
         <Button onClick={onBack}>Back to the week</Button>
       </div>
     );
@@ -493,10 +506,25 @@ function SessionView({
       <div>
         <span className="hand text-[30px] leading-none">{day.title}</span>
         <p className="caption">
-          {DAY_LABEL[session.day]} session of the week of {formatDayLabel(session.weekStart)}
+          {session.day === 'custom'
+            ? 'Custom workout: extra work, not scored'
+            : `${DAY_LABEL[session.day]} session of the week of ${formatDayLabel(session.weekStart)}`}
           {deload ? ' · deload week' : ''}
         </p>
       </div>
+
+      {isCustom && (
+        <div>
+          <button onClick={() => setShowChart((v) => !v)} className="hand text-[18px] text-[var(--ink-muted)] underline">
+            {showChart ? 'hide what this hits' : 'what this hits'}
+          </button>
+          {showChart && (
+            <div className="mt-2">
+              <HitChart plan={session.customPlan ?? []} />
+            </div>
+          )}
+        </div>
+      )}
 
       {day.slots.map((s) => (
         <ExerciseBlock
@@ -619,13 +647,16 @@ function TrainHome({
   sessions,
   deloadWeeks,
   onOpen,
+  onBuild,
 }: {
   profile: Profile;
   today: string;
   sessions: DuoSession[];
   deloadWeeks: string[];
   onOpen: (key: string) => void;
+  onBuild: (t?: WorkoutTemplate) => void;
 }) {
+  const templates = useLiveQuery(() => getTemplates(profile), [profile], [] as WorkoutTemplate[]);
   const weekStart = weekStartFor(today);
   const deload = deloadWeeks.includes(weekStart);
   const todayKey = dayKeyFor(today);
@@ -633,6 +664,7 @@ function TrainHome({
   const [bw, setBw] = useState('');
   const mine = sessions.filter((s) => s.profile === profile && s.weekStart === weekStart);
   const find = (d: DayKey) => mine.find((s) => s.day === d);
+  const customs = mine.filter((s) => s.day === 'custom');
   const wk = weekScore(mine, deload);
 
   async function start(day: DayKey) {
@@ -715,6 +747,67 @@ function TrainHome({
           </button>
         </div>
         <p className="caption">Half the sets, rounded up, for both of you. Scoring uses the reduced plan.</p>
+      </SketchCard>
+
+      <SketchCard filter="rough2" className="px-5 pt-4 pb-4">
+        <span className="hand text-[24px]">custom workout</span>
+        <p className="caption mt-0.5">
+          Pick a body part, choose from every exercise for it, and see which muscles and angles you'll hit.
+        </p>
+        <Button className="mt-3 w-full" onClick={() => onBuild()}>
+          Build a workout
+        </Button>
+        {templates.map((t) => (
+          <div key={t.id} className="mt-3 flex items-center justify-between gap-3 border-t-[1.5px] border-dashed border-[var(--rule)] pt-3">
+            <div className="min-w-0">
+              <span className="hand block truncate text-[20px]">{t.name}</span>
+              <span className="caption">{t.plan.length} exercises</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                aria-label={`delete ${t.name}`}
+                onClick={() => void deleteTemplate(profile, t.id)}
+                className="hand px-1 text-[20px] text-[var(--ink-muted)]"
+              >
+                ×
+              </button>
+              <Button
+                variant="secondary"
+                className="px-3 text-[14px]"
+                onClick={async () => {
+                  const s = await startCustomSession(profile, weekStart, today, t.name, t.plan);
+                  onOpen(s.key);
+                }}
+              >
+                Start
+              </Button>
+              <Button variant="secondary" className="px-3 text-[14px]" onClick={() => onBuild(t)}>
+                Edit
+              </Button>
+            </div>
+          </div>
+        ))}
+        {customs.length > 0 && (
+          <div className="mt-3 border-t-[1.5px] border-dashed border-[var(--rule)] pt-2">
+            <span className="annot">this week</span>
+            {customs.map((c) => {
+              const st = sessionStats(c, false);
+              return (
+                <div key={c.key} className="flex items-center justify-between gap-3 py-1.5">
+                  <div className="min-w-0">
+                    <span className="block truncate text-[15px] font-semibold">{c.customName || 'Custom workout'}</span>
+                    <span className="tnum caption">
+                      {st.done}/{st.planned} sets · {c.status === 'complete' ? 'done' : 'in progress'}
+                    </span>
+                  </div>
+                  <Button variant="secondary" className="shrink-0 px-3 text-[14px]" onClick={() => onOpen(c.key)}>
+                    {c.status === 'complete' ? 'View' : 'Resume'}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </SketchCard>
 
       <SketchCard filter="rough2" className="px-5 pt-4 pb-4">
@@ -954,6 +1047,7 @@ export function DuoScreen({ today, profile: devProfile }: { today: string; profi
   useEffect(() => setProfile(devProfile), [devProfile]);
   const [view, setView] = useState<View>('train');
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [building, setBuilding] = useState<{ name: string; plan: DuoCustomSlot[] } | null>(null);
   const restTimer = useRestTimer();
 
   const sessions = useLiveQuery(() => db.duoSessions.toArray(), [], [] as DuoSession[]);
@@ -977,7 +1071,7 @@ export function DuoScreen({ today, profile: devProfile }: { today: string; profi
           <span className="annot shrink-0">train · {formatDayLabel(weekStartFor(today))}</span>
         </header>
 
-        {!open && (
+        {!open && !building && (
           <div className="flex gap-2">
             {(['train', 'challenge', 'progress'] as View[]).map((v) => (
               <Chip key={v} on={view === v} onClick={() => setView(v)}>
@@ -987,7 +1081,18 @@ export function DuoScreen({ today, profile: devProfile }: { today: string; profi
           </div>
         )}
 
-        {open ? (
+        {building ? (
+          <CustomBuilder
+            profile={profile}
+            today={today}
+            initial={building.plan.length ? building : undefined}
+            onClose={() => setBuilding(null)}
+            onStart={(key) => {
+              setBuilding(null);
+              setOpenKey(key);
+            }}
+          />
+        ) : open ? (
           <SessionView
             session={open}
             profile={profile}
@@ -1004,7 +1109,14 @@ export function DuoScreen({ today, profile: devProfile }: { today: string; profi
             }}
           />
         ) : view === 'train' ? (
-          <TrainHome profile={profile} today={today} sessions={sessions} deloadWeeks={deloadWeeks} onOpen={setOpenKey} />
+          <TrainHome
+            profile={profile}
+            today={today}
+            sessions={sessions}
+            deloadWeeks={deloadWeeks}
+            onOpen={setOpenKey}
+            onBuild={(t) => setBuilding({ name: t?.name ?? '', plan: t?.plan ?? [] })}
+          />
         ) : view === 'challenge' ? (
           <Challenge today={today} sessions={sessions} deloadWeeks={deloadWeeks} seasonStart={seasonStart} />
         ) : (

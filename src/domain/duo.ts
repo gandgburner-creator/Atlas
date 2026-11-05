@@ -1,4 +1,4 @@
-import type { DuoSession, DuoSet, ISODate, Workout } from '../db/schema';
+import type { DuoCustomSlot, DuoSession, DuoSet, ISODate, Workout } from '../db/schema';
 import { addDays, fromISODate, weekStartOf } from './time';
 
 /**
@@ -224,8 +224,21 @@ export interface SessionStats {
   relVolume: number;
 }
 
-export function sessionStats(s: DuoSession, deload: boolean): SessionStats {
-  const day = DUO_PROGRAM[s.day];
+export const toSlot = (c: DuoCustomSlot): SlotDef => ({
+  id: c.id, name: c.name, sets: c.sets, repLow: c.repLow, repHigh: c.repHigh,
+  rest: c.rest, mult: c.mult, bodyweight: c.bodyweight, alts: [],
+});
+
+/** The exercises a session is made of: the program's day, or the custom pick. */
+export function planOf(s: Pick<DuoSession, 'day' | 'customName' | 'customPlan'>): { title: string; slots: SlotDef[] } {
+  if (s.day === 'custom') return { title: s.customName || 'Custom workout', slots: (s.customPlan ?? []).map(toSlot) };
+  return DUO_PROGRAM[s.day];
+}
+
+export function sessionStats(s: DuoSession, deloadWeek: boolean): SessionStats {
+  const day = planOf(s);
+  // A custom workout is exactly the sets chosen: a deload week doesn't halve it.
+  const deload = s.day === 'custom' ? false : deloadWeek;
   let planned = 0;
   let done = 0;
   let volume = 0;
@@ -323,7 +336,9 @@ export function buildHistory(
       out.push({
         date: s.date,
         name: ex.name,
-        slotId: ex.slotId,
+        // Custom sessions reuse slot ids (c1, c2...) for different exercises,
+        // so they can't be used to match "the same slot" across sessions.
+        slotId: s.day === 'custom' ? undefined : ex.slotId,
         sets: sets.map((x) => ({ weight: x.weight, reps: x.reps, load: loadOf(x.weight, bw, s.bodyweight) })),
       });
     }
@@ -440,11 +455,13 @@ export interface WeekScore {
   completionPct: number;
 }
 
-export function weekScore(sessions: DuoSession[], deload: boolean): WeekScore {
+export function weekScore(all: DuoSession[], deload: boolean): WeekScore {
   let sets = 0;
   let sessionsComplete = 0;
   let volume = 0;
   let relVolume = 0;
+  // Custom workouts are extra work, not one of the week's five sessions.
+  const sessions = all.filter((s) => s.day !== 'custom');
   for (const s of sessions) {
     const st = sessionStats(s, deload);
     sets += st.done;

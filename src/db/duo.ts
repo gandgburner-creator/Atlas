@@ -1,4 +1,4 @@
-import { db, type DuoSession, type DuoSet, type DuoWeight, type ISODate } from './schema';
+import { db, type DuoCustomSlot, type DuoSession, type DuoSet, type DuoWeight, type ISODate } from './schema';
 import {
   EMPTY_PREFS,
   SEASON_1_START,
@@ -193,6 +193,62 @@ export async function finishDuoSession(key: string): Promise<void> {
     await db.duoSessions.put(s);
   });
   changed();
+}
+
+// ── Custom workouts ───────────────────────────────────────────────────────
+
+/**
+ * Open a custom workout. The key ends in a shared id, so the same workout
+ * opened for the other person (the in-session toggle) is the same id on both
+ * sides, and opening it twice returns the same session.
+ */
+export async function startCustomSession(
+  profile: Profile,
+  weekStart: ISODate,
+  date: ISODate,
+  name: string,
+  plan: DuoCustomSlot[],
+  customId: string = Date.now().toString(36),
+): Promise<DuoSession> {
+  const key = `${profile}:${weekStart}:custom:${customId}`;
+  const bodyweight = await bodyweightOn(profile, date);
+  const out = await db.transaction('rw', db.duoSessions, async () => {
+    const existing = await db.duoSessions.get(key);
+    if (existing) return existing;
+    const s: DuoSession = {
+      key, profile, weekStart, day: 'custom', date, bodyweight, customName: name, customPlan: plan,
+      exercises: [], deload: false, status: 'in_progress', startedAt: Date.now(), updatedAt: Date.now(),
+    };
+    await db.duoSessions.put(s);
+    return s;
+  });
+  return out;
+}
+
+export interface WorkoutTemplate {
+  id: string;
+  name: string;
+  plan: DuoCustomSlot[];
+}
+
+const templatesKey = (p: Profile) => `duoTemplates:${p}`;
+
+export async function getTemplates(p: Profile): Promise<WorkoutTemplate[]> {
+  return ((await db.config.get(templatesKey(p)))?.value as WorkoutTemplate[] | undefined) ?? [];
+}
+
+export function saveTemplate(p: Profile, t: WorkoutTemplate): Promise<void> {
+  return db.transaction('rw', db.config, async () => {
+    const cur = ((await db.config.get(templatesKey(p)))?.value as WorkoutTemplate[] | undefined) ?? [];
+    await db.config.put({ key: templatesKey(p), value: [...cur.filter((x) => x.id !== t.id), t] });
+  });
+}
+
+export function deleteTemplate(p: Profile, id: string): Promise<void> {
+  return db.transaction('rw', db.config, async () => {
+    const cur = ((await db.config.get(templatesKey(p)))?.value as WorkoutTemplate[] | undefined) ?? [];
+    await db.config.put({ key: templatesKey(p), value: cur.filter((x) => x.id !== id) });
+  });
 }
 
 // ── Preferences, deload, season ───────────────────────────────────────────

@@ -254,3 +254,82 @@ describe('last time survives a swap that is not on this phone', () => {
     expect(lastForSlot(buildHistory('gaby', [g], [], undefined, 49), 'thu-2')).toBeUndefined();
   });
 });
+
+import { analyze, ANGLES_BY_GROUP, GROUPS, LIBRARY, LIB_BY_ID, MUSCLES_BY_GROUP } from './exerciseLibrary';
+
+describe('exercise library and coverage chart', () => {
+  const known = new Set(GROUPS.flatMap((g) => MUSCLES_BY_GROUP[g]));
+  it('is extensive and every entry is well-formed', () => {
+    expect(LIBRARY.length).toBeGreaterThan(100);
+    expect(new Set(LIBRARY.map((e) => e.id)).size).toBe(LIBRARY.length);
+    for (const g of GROUPS) expect(LIBRARY.filter((e) => e.group === g).length).toBeGreaterThanOrEqual(10);
+    for (const e of LIBRARY) {
+      expect(e.primary.length, e.name).toBeGreaterThan(0);
+      expect(e.angles.length, e.name).toBeGreaterThan(0);
+      expect(e.repLow, e.name).toBeLessThanOrEqual(e.repHigh);
+      // Every muscle named must be one the chart knows, or it would silently vanish.
+      for (const m of [...e.primary, ...e.secondary]) expect(known.has(m), `${e.name}: ${m}`).toBe(true);
+    }
+  });
+  it('gives every angle a leg workout should cover at least one exercise', () => {
+    const all = new Set(LIBRARY.flatMap((e) => e.angles));
+    for (const g of GROUPS) for (const a of ANGLES_BY_GROUP[g]) expect(all.has(a), `${g}: ${a}`).toBe(true);
+  });
+  it('splits chest by angle: incline hits upper chest, decline hits lower', () => {
+    const inc = analyze([{ libId: LIB_BY_ID.get('chest-incline-db-press')!.id, sets: 3 }]);
+    expect(inc.muscles.find((m) => m.muscle === 'upper chest')?.primary).toBe(3);
+    expect(inc.muscles.find((m) => m.muscle === 'lower chest')).toBeUndefined();
+    expect(inc.angles).toEqual([{ angle: 'incline press', sets: 3 }]);
+    const dec = analyze([{ libId: 'chest-decline-barbell-press', sets: 4 }]);
+    expect(dec.muscles.find((m) => m.muscle === 'lower chest')?.primary).toBe(4);
+  });
+  it('counts supporting muscles at half credit', () => {
+    const c = analyze([{ libId: 'legs-barbell-back-squat', sets: 4 }]);
+    const glutes = c.muscles.find((m) => m.muscle === 'glutes')!;
+    const adductors = c.muscles.find((m) => m.muscle === 'adductors')!;
+    expect(glutes.effective).toBe(4);
+    expect(adductors).toMatchObject({ primary: 0, secondary: 4, effective: 2 });
+  });
+  it('lists what a legs workout is still missing', () => {
+    const c = analyze([
+      { libId: 'legs-barbell-back-squat', sets: 3 },
+      { libId: 'legs-leg-extension', sets: 3 },
+    ]);
+    const legs = c.gaps.find((g) => g.group === 'legs')!;
+    expect(legs.muscles).toEqual(expect.arrayContaining(['hamstrings', 'calves', 'adductors', 'abductors']));
+    expect(legs.muscles).not.toContain('quads');
+    expect(legs.angles).toEqual(expect.arrayContaining(['hinge', 'knee flexion', 'calf raise']));
+    expect(legs.angles).not.toContain('squat pattern');
+  });
+  it('ignores unknown ids and empty sets', () => {
+    expect(analyze([{ libId: 'nope', sets: 3 }, { libId: 'legs-leg-extension', sets: 0 }]).muscles).toEqual([]);
+  });
+});
+
+describe('custom workouts stay out of the weekly score', () => {
+  const custom: DuoSession = {
+    key: 'ghaith:2026-10-19:custom:abc', profile: 'ghaith', weekStart: W1, day: 'custom', date: W1,
+    bodyweight: 100, deload: false, status: 'complete', startedAt: 1,
+    customName: 'Legs', customPlan: [{ id: 'c1', name: 'Leg Extension', sets: 3, repLow: 10, repHigh: 15, rest: 75, mult: 1, libId: 'legs-leg-extension' }],
+    exercises: [{ slotId: 'c1', name: 'Leg Extension', sets: [set(50, 12), set(50, 12), set(50, 12)] }],
+  };
+  it('counts its own volume and completion', () => {
+    const st = sessionStats(custom, false);
+    expect(st).toMatchObject({ planned: 3, done: 3, complete: true });
+    expect(st.volume).toBe(50 * 12 * 3);
+  });
+  it('adds nothing to points, sets or sessions in the week', () => {
+    const w = weekScore([custom, sess('ghaith', W1, 'mon', 'all')], false);
+    expect(w.sets).toBe(15);
+    expect(w.sessionsComplete).toBe(1);
+    expect(w.points).toBe(25);
+  });
+  it('is not halved in a deload week', () => {
+    expect(sessionStats(custom, true).planned).toBe(3);
+  });
+  it('shows up as last time for the same exercise, but never as a "same slot" match', () => {
+    const hist = buildHistory('ghaith', [custom], [], undefined, 100);
+    expect(lastTime(hist, 'Leg Extension')?.sets[0]?.weight).toBe(50);
+    expect(lastForSlot(hist, 'c1')).toBeUndefined();
+  });
+});
