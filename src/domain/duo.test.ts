@@ -333,3 +333,44 @@ describe('custom workouts stay out of the weekly score', () => {
     expect(lastForSlot(hist, 'c1')).toBeUndefined();
   });
 });
+
+describe('adding and removing exercises in a program session', () => {
+  const full = () => sess('ghaith', W1, 'thu', 'all');
+  const total = sessionStats(full(), false).planned;
+
+  it('removing an exercise shrinks the plan and finishing the rest still completes it', () => {
+    const s = full();
+    const gone = s.exercises[0]!.slotId;
+    s.removedSlots = [gone];
+    s.exercises = s.exercises.filter((e) => e.slotId !== gone);
+    const st = sessionStats(s, false);
+    expect(st.planned).toBeLessThan(total);
+    expect(st.complete).toBe(true);
+    expect(weekScore([s], false).planned).toBe(weekScore([full()], false).planned - (total - st.planned));
+  });
+
+  it('an added exercise adds volume but no points or planned sets', () => {
+    const s = full();
+    const before = sessionStats(s, false);
+    s.extras = [{ id: 'x1', name: 'Decline Machine Press', sets: 3, repLow: 8, repHigh: 12, rest: 90, mult: 1 }];
+    s.exercises = [...s.exercises, { slotId: 'x1', name: 'Decline Machine Press', sets: [set(40, 10)] }];
+    const after = sessionStats(s, false);
+    expect(after.planned).toBe(before.planned);
+    expect(after.volume).toBeGreaterThan(before.volume);
+  });
+
+  it('merging unions removals and extras from both phones', () => {
+    const a = { ...full(), updatedAt: 1, removedSlots: ['thu-1'] };
+    const b = {
+      ...full(), updatedAt: 2, removedSlots: ['thu-2'],
+      extras: [{ id: 'x1', name: 'Own', sets: 3, repLow: 8, repHigh: 12, rest: 90, mult: 1 }],
+    };
+    const m = mergeSession(a, b);
+    expect([...(m.removedSlots ?? [])].sort()).toEqual(['thu-1', 'thu-2']);
+    expect(m.extras?.map((x) => x.id)).toEqual(['x1']);
+  });
+
+  it('the library has a decline machine press', () => {
+    expect(LIBRARY.some((e) => e.name === 'Decline Machine Press')).toBe(true);
+  });
+});

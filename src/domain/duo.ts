@@ -242,7 +242,10 @@ export function sessionStats(s: DuoSession, deloadWeek: boolean): SessionStats {
   let planned = 0;
   let done = 0;
   let volume = 0;
+  // Dropped exercises leave the plan; they were never skipped, just not done.
+  const removed = new Set(s.removedSlots ?? []);
   for (const sl of day.slots) {
+    if (removed.has(sl.id)) continue;
     const p = plannedSets(sl.sets, deload);
     planned += p;
     const ex = s.exercises.find((e) => e.slotId === sl.id);
@@ -252,6 +255,14 @@ export function sessionStats(s: DuoSession, deloadWeek: boolean): SessionStats {
       if (!set) continue;
       done += 1;
       volume += loadOf(set.weight, bodyweight, s.bodyweight) * set.reps * mult;
+    }
+  }
+  // Added exercises are extra work: they count in volume (it is real load
+  // moved) but not in sets, completion or points, which come from the plan.
+  for (const x of s.extras ?? []) {
+    const ex = s.exercises.find((e) => e.slotId === x.id);
+    for (const set of ex?.sets ?? []) {
+      if (set) volume += loadOf(set.weight, Boolean(x.bodyweight), s.bodyweight) * set.reps * x.mult;
     }
   }
   return {
@@ -336,9 +347,10 @@ export function buildHistory(
       out.push({
         date: s.date,
         name: ex.name,
-        // Custom sessions reuse slot ids (c1, c2...) for different exercises,
-        // so they can't be used to match "the same slot" across sessions.
-        slotId: s.day === 'custom' ? undefined : ex.slotId,
+        // Only the program's own slots (mon-1...) mean "the same place in the
+        // week" from session to session. Custom (c1) and added (x1) ids are
+        // reused for different exercises, so they must never match.
+        slotId: /^[a-z]{3}-\d$/.test(ex.slotId) ? ex.slotId : undefined,
         sets: sets.map((x) => ({ weight: x.weight, reps: x.reps, load: loadOf(x.weight, bw, s.bodyweight) })),
       });
     }
@@ -469,7 +481,11 @@ export function weekScore(all: DuoSession[], deload: boolean): WeekScore {
     relVolume += st.relVolume;
     if (st.complete) sessionsComplete += 1;
   }
-  const planned = weekPlannedSets(deload);
+  // The week's plan, less anything dropped from a session that was started.
+  const planned = DAY_KEYS.reduce((n, d) => {
+    const s = sessions.find((x) => x.day === d);
+    return n + (s ? sessionStats(s, deload).planned : dayPlannedSets(d, deload));
+  }, 0);
   const perfect = sessionsComplete === DAY_KEYS.length;
   return {
     sets,
@@ -597,8 +613,14 @@ export function mergeSession(a: DuoSession, b: DuoSession): DuoSession {
     }
     return { slotId, name: ea.sets.some(Boolean) ? ea.name : eb.name, sets };
   });
+  // Dropped and added exercises from either phone are kept.
+  const removedSlots = [...new Set([...(a.removedSlots ?? []), ...(b.removedSlots ?? [])])];
+  const extraMap = new Map<string, DuoCustomSlot>();
+  for (const x of [...(older.extras ?? []), ...(newer.extras ?? [])]) extraMap.set(x.id, x);
   return {
     ...newer,
+    ...(removedSlots.length ? { removedSlots } : {}),
+    ...(extraMap.size ? { extras: [...extraMap.values()] } : {}),
     exercises,
     startedAt: Math.min(a.startedAt, b.startedAt),
     updatedAt: Math.max(a.updatedAt ?? 0, b.updatedAt ?? 0),

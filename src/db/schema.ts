@@ -336,6 +336,13 @@ export interface DuoSession {
    * the weekly program, so they are never scored. */
   customName?: string;
   customPlan?: DuoCustomSlot[];
+  /** Program sessions only: exercises dropped for this session (a machine
+   * was taken, an injury). They leave the plan, so finishing the rest still
+   * completes the session. */
+  removedSlots?: string[];
+  /** Program sessions only: exercises added on the day. Logged and counted in
+   * volume, but not part of the plan, so they never add points. */
+  extras?: DuoCustomSlot[];
   /** Local date it was actually done. */
   date: ISODate;
   /** Latest log on or before `date`, frozen so past weeks never change. */

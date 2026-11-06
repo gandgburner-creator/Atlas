@@ -21,6 +21,11 @@ import {
   setSeasonStart,
   deleteTemplate,
   getTemplates,
+  addExtra,
+  removeExtra,
+  removeSlot,
+  restoreSlot,
+  setExtraSets,
   startCustomSession,
   startDuoSession,
   type WorkoutTemplate,
@@ -28,6 +33,7 @@ import {
   updatePrefs,
   weightSeries,
 } from '../db/duo';
+import { LIB_BY_ID } from '../domain/exerciseLibrary';
 import { db, type DuoCustomSlot, type DuoSession, type DuoSet } from '../db/schema';
 import {
   bestE1rm,
@@ -53,6 +59,7 @@ import {
   sessionPrCount,
   sessionStats,
   targetFor,
+  toSlot,
   weekScore,
   weekStartFor,
   type DayKey,
@@ -62,7 +69,7 @@ import {
   type ResolvedSlot,
 } from '../domain/duo';
 import { formatDayLabel } from '../domain/time';
-import { CustomBuilder, HitChart } from './DuoCustom';
+import { CustomBuilder, ExerciseBrowser, HitChart } from './DuoCustom';
 import { RestBar, useRestTimer } from './TrainingShared';
 
 type View = 'train' | 'challenge' | 'progress';
@@ -254,6 +261,8 @@ function ExerciseBlock({
   deload,
   hist,
   onLogged,
+  extra,
+  onRemove,
 }: {
   profile: Profile;
   session: DuoSession;
@@ -261,6 +270,9 @@ function ExerciseBlock({
   deload: boolean;
   hist: HistEntry[];
   onLogged: (name: string, rest: number) => void;
+  /** Added for today only: its set count is editable. */
+  extra?: boolean;
+  onRemove?: () => void;
 }) {
   const [opts, setOpts] = useState(false);
   const ex = session.exercises.find((e) => e.slotId === r.slotId);
@@ -287,6 +299,7 @@ function ExerciseBlock({
           <span className="hand block text-[26px] leading-tight">{r.name}</span>
           <p className="caption">
             {planned} × {range} · rest {r.rest}s · ×{r.mult}
+            {extra ? ' · added today' : ''}
           </p>
         </div>
         <button onClick={() => setOpts((v) => !v)} className="hand shrink-0 px-1 py-1 text-[16px] text-[var(--ink-muted)]">
@@ -320,6 +333,16 @@ function ExerciseBlock({
             </div>
             {anyDone && <p className="caption mt-1">Swap before the first set; this one is already underway.</p>}
           </div>
+          {extra && (
+            <div className="flex items-center justify-between">
+              <span className="annot">sets</span>
+              <div className="flex items-center gap-3">
+                <button className="hand px-2 text-[22px]" onClick={() => void setExtraSets(session.key, r.slotId, r.sets - 1)}>−</button>
+                <span className="tnum text-[17px] font-semibold">{r.sets}</span>
+                <button className="hand px-2 text-[22px]" onClick={() => void setExtraSets(session.key, r.slotId, r.sets + 1)}>+</button>
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="annot">rest</span>
             <div className="flex items-center gap-3">
@@ -328,6 +351,15 @@ function ExerciseBlock({
               <button className="hand px-2 text-[22px]" onClick={() => void updatePrefs(profile, (p) => ({ ...p, rests: { ...p.rests, [r.slotId]: r.rest + 15 } }))}>+</button>
             </div>
           </div>
+          {onRemove && (
+            anyDone ? (
+              <p className="caption">Can't remove an exercise with logged sets.</p>
+            ) : (
+              <button onClick={onRemove} className="hand self-start text-[18px] text-[var(--accent)] underline">
+                {extra ? 'remove this exercise' : 'skip this exercise today'}
+              </button>
+            )
+          )}
           <div className="flex items-center justify-between">
             <span className="annot">progression step</span>
             <div className="flex items-center gap-3">
@@ -526,17 +558,35 @@ function SessionView({
         </div>
       )}
 
-      {day.slots.map((s) => (
-        <ExerciseBlock
-          key={s.id}
-          profile={profile}
-          session={session}
-          r={resolveSlot(s, prefs, profile)}
-          deload={deload}
-          hist={hist}
-          onLogged={onLogged}
-        />
-      ))}
+      {day.slots
+        .filter((s) => !(session.removedSlots ?? []).includes(s.id))
+        .map((s) => (
+          <ExerciseBlock
+            key={s.id}
+            profile={profile}
+            session={session}
+            r={resolveSlot(s, prefs, profile)}
+            deload={deload}
+            hist={hist}
+            onLogged={onLogged}
+            onRemove={isCustom ? undefined : () => void removeSlot(session.key, s.id)}
+          />
+        ))}
+      {!isCustom &&
+        (session.extras ?? []).map((x) => (
+          <ExerciseBlock
+            key={x.id}
+            profile={profile}
+            session={session}
+            r={resolveSlot(toSlot(x), prefs, profile)}
+            deload={false}
+            hist={hist}
+            onLogged={onLogged}
+            extra
+            onRemove={() => void removeExtra(session.key, x.id)}
+          />
+        ))}
+      {!isCustom && <AddRemovePanel session={session} slots={day.slots} />}
 
       <div className="flex flex-col gap-2">
         <label htmlFor="duo-note" className="hand text-[20px]">
@@ -562,6 +612,81 @@ function SessionView({
       </Button>
       {!stats.complete && (
         <p className="caption text-center">Sets you haven't confirmed simply don't score.</p>
+      )}
+    </div>
+  );
+}
+
+/** Skipped-today list with Restore, plus adding an exercise from the library or by name. */
+function AddRemovePanel({ session, slots }: { session: DuoSession; slots: { id: string; name: string }[] }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [equip, setEquip] = useState<'machine' | 'barbell' | 'dumbbell' | 'bodyweight'>('machine');
+  const removed = slots.filter((s) => (session.removedSlots ?? []).includes(s.id));
+  const added = new Set((session.extras ?? []).map((x) => x.libId).filter((x): x is string => !!x));
+  return (
+    <div className="flex flex-col gap-2">
+      {removed.length > 0 && (
+        <SketchCard filter="rough2" className="px-4 py-3">
+          <span className="annot">skipped today</span>
+          {removed.map((s) => (
+            <div key={s.id} className="flex items-center justify-between gap-3 py-1">
+              <span className="text-[15px] font-medium">{s.name}</span>
+              <button onClick={() => void restoreSlot(session.key, s.id)} className="hand text-[18px] underline">
+                restore
+              </button>
+            </div>
+          ))}
+        </SketchCard>
+      )}
+      <Button variant="secondary" onClick={() => setOpen((v) => !v)}>
+        {open ? 'Close' : 'Add an exercise'}
+      </Button>
+      {open && (
+        <SketchCard filter="rough2" className="px-4 py-4">
+          <p className="caption mb-2">Added for today only. It doesn't change the week's score target.</p>
+          <ExerciseBrowser
+            added={added}
+            onAdd={(id) => {
+              const e = LIB_BY_ID.get(id);
+              if (!e) return;
+              void addExtra(session.key, {
+                name: e.name, sets: 3, repLow: e.repLow, repHigh: e.repHigh, rest: e.rest,
+                mult: e.mult, bodyweight: e.bodyweight, libId: e.id,
+              });
+            }}
+          />
+          <DashedRule className="mt-4 pt-3" />
+          <span className="annot">not in the list? add your own</span>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(['machine', 'barbell', 'dumbbell', 'bodyweight'] as const).map((q) => (
+              <Chip key={q} on={equip === q} onClick={() => setEquip(q)}>{q}</Chip>
+            ))}
+          </div>
+          <div className="mt-2 relative flex h-[48px] items-center bg-[var(--paper)] px-3 [--field-stroke:var(--ink)] focus-within:[--field-stroke:var(--accent)]">
+            <SketchBorder filter="rough2" radius={4} strokeWidth={2} stroke="var(--field-stroke)" />
+            <input
+              aria-label="exercise name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Exercise name"
+              className="relative w-full bg-transparent text-[16px] font-medium outline-none placeholder:text-[var(--ink-faint)]"
+            />
+          </div>
+          <Button
+            className="mt-2 w-full"
+            disabled={!name.trim()}
+            onClick={() => {
+              void addExtra(session.key, {
+                name: name.trim(), sets: 3, repLow: 8, repHigh: 12, rest: 90,
+                mult: equip === 'dumbbell' ? 2 : 1, bodyweight: equip === 'bodyweight' || undefined,
+              });
+              setName('');
+            }}
+          >
+            Add it
+          </Button>
+        </SketchCard>
       )}
     </div>
   );

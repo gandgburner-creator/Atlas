@@ -106,6 +106,7 @@ chest|Decline Barbell Press|barbell|1|6-10|lower chest|triceps,front delts|decli
 chest|Flat DB Press|dumbbell|2|6-10|mid chest|triceps,front delts|flat press
 chest|Incline DB Press|dumbbell|2|6-10|upper chest|front delts,triceps|incline press
 chest|Decline DB Press|dumbbell|2|8-12|lower chest|triceps|decline press
+chest|Decline Machine Press|machine|1|8-12|lower chest|triceps,front delts|decline press
 chest|Machine Chest Press|machine|1|8-12|mid chest|triceps,front delts|flat press
 chest|Incline Machine Press|machine|1|8-12|upper chest|front delts,triceps|incline press
 chest|Smith Incline Press|machine|1|8-12|upper chest|front delts,triceps|incline press

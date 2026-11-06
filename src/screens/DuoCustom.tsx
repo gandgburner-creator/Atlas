@@ -117,6 +117,108 @@ export function HitChart({ plan }: { plan: DuoCustomSlot[] }) {
 }
 
 /**
+ * Pick body parts, browse everything for them, search, filter by equipment,
+ * and add. Shared by the custom workout builder and the in-session "add an
+ * exercise", so both list the same library the same way.
+ */
+export function ExerciseBrowser({
+  added,
+  onAdd,
+  initialGroups = [],
+}: {
+  added: Set<string>;
+  onAdd: (libId: string) => void;
+  initialGroups?: Group[];
+}) {
+  const [groups, setGroups] = useState<Group[]>(initialGroups);
+  const [equip, setEquip] = useState<Equip | null>(null);
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const results = LIBRARY.filter(
+    (e) =>
+      (groups.length === 0 || groups.includes(e.group)) &&
+      (!equip || e.equip === equip) &&
+      (!q || e.name.toLowerCase().includes(q)),
+  );
+  const browsing = groups.length > 0 || q.length > 0;
+  return (
+    <>
+      <div className="flex flex-wrap gap-2">
+        {GROUPS.map((g) => (
+          <Pill
+            key={g}
+            on={groups.includes(g)}
+            onClick={() => setGroups(groups.includes(g) ? groups.filter((x) => x !== g) : [...groups, g])}
+          >
+            {g}
+          </Pill>
+        ))}
+      </div>
+      <div className="mt-3 relative flex h-[48px] items-center bg-[var(--paper)] px-3 [--field-stroke:var(--ink)] focus-within:[--field-stroke:var(--accent)]">
+        <SketchBorder filter="rough2" radius={4} strokeWidth={2} stroke="var(--field-stroke)" />
+        <input
+          aria-label="search exercises"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search all exercises"
+          className="relative w-full bg-transparent text-[16px] font-medium outline-none placeholder:text-[var(--ink-faint)]"
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Pill on={equip === null} onClick={() => setEquip(null)}>
+          any equipment
+        </Pill>
+        {EQUIPMENT.map((e) => (
+          <Pill key={e} on={equip === e} onClick={() => setEquip(equip === e ? null : e)}>
+            {e}
+          </Pill>
+        ))}
+      </div>
+
+      {browsing ? (
+        <div className="mt-3">
+          <span className="annot">
+            {results.length} {results.length === 1 ? 'exercise' : 'exercises'}: scroll the list
+          </span>
+          {/* Its own scroll area, so a long list doesn't push everything else
+              thousands of pixels down the page. */}
+          <div className="mt-1 flex max-h-[58vh] flex-col gap-2 overflow-y-auto overscroll-contain pr-1" aria-label="exercise list">
+            {results.map((e) => (
+              <SketchCard key={e.id} filter="rough2" className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="hand block text-[22px] leading-tight">{e.name}</span>
+                    <p className="caption">
+                      {e.equip} · {e.repLow}–{e.repHigh} reps
+                    </p>
+                    <p className="text-[13px] leading-snug">
+                      <span className="font-semibold">{e.primary.join(', ')}</span>
+                      {e.secondary.length > 0 && <span className="text-[var(--ink-muted)]"> + {e.secondary.join(', ')}</span>}
+                    </p>
+                    <p className="annot mt-1">{e.angles.join(' · ')}</p>
+                  </div>
+                  <Button
+                    variant={added.has(e.id) ? 'secondary' : 'primary'}
+                    className="shrink-0 px-4 text-[14px]"
+                    disabled={added.has(e.id)}
+                    onClick={() => onAdd(e.id)}
+                  >
+                    {added.has(e.id) ? 'Added' : 'Add'}
+                  </Button>
+                </div>
+              </SketchCard>
+            ))}
+            {results.length === 0 && <p className="caption">Nothing matches. Try another word or clear a filter.</p>}
+          </div>
+        </div>
+      ) : (
+        <p className="caption mt-3">Pick a body part above to see every exercise for it, or search by name.</p>
+      )}
+    </>
+  );
+}
+
+/**
  * Build a workout from the library: pick body parts, browse everything for
  * them, choose, and watch the chart fill in as you go. Opens as a normal
  * session (same logging, same last-time, same rest timers).
@@ -135,30 +237,17 @@ export function CustomBuilder({
   onStart: (key: string) => void;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [equip, setEquip] = useState<Equip | null>(null);
-  const [query, setQuery] = useState('');
   const [plan, setPlan] = useState<DuoCustomSlot[]>(initial?.plan ?? []);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const q = query.trim().toLowerCase();
-  const results = LIBRARY.filter(
-    (e) =>
-      (groups.length === 0 || groups.includes(e.group)) &&
-      (!equip || e.equip === equip) &&
-      (!q || e.name.toLowerCase().includes(q)),
-  );
-  const browsing = groups.length > 0 || q.length > 0;
-  const added = new Set(plan.map((p) => p.libId));
-  const defaultName = groups.length
-    ? groups.map((g) => g[0]!.toUpperCase() + g.slice(1)).join(' + ')
-    : plan.length
-      ? [...new Set(plan.map((p) => LIB_BY_ID.get(p.libId ?? '')?.group))]
-          .filter(Boolean)
-          .map((g) => g![0]!.toUpperCase() + g!.slice(1))
-          .join(' + ')
-      : 'Custom workout';
+  const added = new Set(plan.map((p) => p.libId).filter((x): x is string => !!x));
+  const defaultName = plan.length
+    ? [...new Set(plan.map((p) => LIB_BY_ID.get(p.libId ?? '')?.group))]
+        .filter(Boolean)
+        .map((g) => g![0]!.toUpperCase() + g!.slice(1))
+        .join(' + ')
+    : 'Custom workout';
   const finalName = name.trim() || defaultName;
 
   function add(id: string) {
@@ -200,81 +289,11 @@ export function CustomBuilder({
       </div>
 
       <SketchCard className="px-4 pt-4 pb-4">
-        <label htmlFor="custom-name" className="hand text-[22px]">
-          what are we training?
-        </label>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {GROUPS.map((g) => (
-            <Pill
-              key={g}
-              on={groups.includes(g)}
-              onClick={() => setGroups(groups.includes(g) ? groups.filter((x) => x !== g) : [...groups, g])}
-            >
-              {g}
-            </Pill>
-          ))}
-        </div>
-        <div className="mt-3 relative flex h-[48px] items-center bg-[var(--paper)] px-3 [--field-stroke:var(--ink)] focus-within:[--field-stroke:var(--accent)]">
-          <SketchBorder filter="rough2" radius={4} strokeWidth={2} stroke="var(--field-stroke)" />
-          <input
-            aria-label="search exercises"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all exercises"
-            className="relative w-full bg-transparent text-[16px] font-medium outline-none placeholder:text-[var(--ink-faint)]"
-          />
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Pill on={equip === null} onClick={() => setEquip(null)}>
-            any equipment
-          </Pill>
-          {EQUIPMENT.map((e) => (
-            <Pill key={e} on={equip === e} onClick={() => setEquip(equip === e ? null : e)}>
-              {e}
-            </Pill>
-          ))}
+        <span className="hand text-[22px]">what are we training?</span>
+        <div className="mt-2">
+          <ExerciseBrowser added={added} onAdd={add} />
         </div>
       </SketchCard>
-
-      {browsing ? (
-        <div>
-          <span className="annot">
-            {results.length} {results.length === 1 ? 'exercise' : 'exercises'}: scroll the list, your workout is below
-          </span>
-          {/* Its own scroll area, so 45 leg exercises don't push your workout
-              and the chart thousands of pixels down the page. */}
-          <div className="mt-1 flex max-h-[58vh] flex-col gap-2 overflow-y-auto overscroll-contain pr-1" aria-label="exercise list">
-          {results.map((e) => (
-            <SketchCard key={e.id} filter="rough2" className="px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <span className="hand block text-[22px] leading-tight">{e.name}</span>
-                  <p className="caption">
-                    {e.equip} · {e.repLow}–{e.repHigh} reps
-                  </p>
-                  <p className="text-[13px] leading-snug">
-                    <span className="font-semibold">{e.primary.join(', ')}</span>
-                    {e.secondary.length > 0 && <span className="text-[var(--ink-muted)]"> + {e.secondary.join(', ')}</span>}
-                  </p>
-                  <p className="annot mt-1">{e.angles.join(' · ')}</p>
-                </div>
-                <Button
-                  variant={added.has(e.id) ? 'secondary' : 'primary'}
-                  className="shrink-0 px-4 text-[14px]"
-                  disabled={added.has(e.id)}
-                  onClick={() => add(e.id)}
-                >
-                  {added.has(e.id) ? 'Added' : 'Add'}
-                </Button>
-              </div>
-            </SketchCard>
-          ))}
-          {results.length === 0 && <p className="caption">Nothing matches. Try another word or clear a filter.</p>}
-          </div>
-        </div>
-      ) : (
-        <p className="caption">Pick a body part above to see every exercise for it, or search by name.</p>
-      )}
 
       <SketchCard className="px-4 pt-4 pb-4">
         <span className="hand text-[26px]">your workout</span>
