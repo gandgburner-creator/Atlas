@@ -311,13 +311,31 @@ export interface DuoExercise {
  * session written on two devices is the same record, which is what lets a
  * shared store merge cleanly later.
  */
+/** One exercise in a custom workout, picked from the library. */
+export interface DuoCustomSlot {
+  id: string;
+  name: string;
+  sets: number;
+  repLow: number;
+  repHigh: number;
+  rest: number;
+  mult: number;
+  bodyweight?: boolean;
+  /** Library entry it came from, which is what the muscle/angle chart reads. */
+  libId?: string;
+}
+
 export interface DuoSession {
   key: string;
   profile: 'ghaith' | 'gaby';
   /** Monday of the week it counts toward. */
   weekStart: ISODate;
   /** Which of the week's five sessions this is, not which weekday it was done. */
-  day: 'mon' | 'tue' | 'wed' | 'thu' | 'sat';
+  day: 'mon' | 'tue' | 'wed' | 'thu' | 'sat' | 'custom';
+  /** Custom workouts only: their name and the exercises picked. Not part of
+   * the weekly program, so they are never scored. */
+  customName?: string;
+  customPlan?: DuoCustomSlot[];
   /** Local date it was actually done. */
   date: ISODate;
   /** Latest log on or before `date`, frozen so past weeks never change. */
