@@ -171,6 +171,45 @@ export function confirmDuoSet(
   });
 }
 
+const hasSets = (s: DuoSession, slotId: string) =>
+  (s.exercises.find((e) => e.slotId === slotId)?.sets ?? []).some(Boolean);
+
+/** Drop a program exercise from this session. Refused once it has logged sets: those are real. */
+export function removeSlot(key: string, slotId: string): Promise<void> {
+  return mutate(key, (s) => {
+    if (hasSets(s, slotId) || (s.removedSlots ?? []).includes(slotId)) return;
+    s.removedSlots = [...(s.removedSlots ?? []), slotId];
+  });
+}
+
+export function restoreSlot(key: string, slotId: string): Promise<void> {
+  return mutate(key, (s) => {
+    s.removedSlots = (s.removedSlots ?? []).filter((x) => x !== slotId);
+  });
+}
+
+/** Add an exercise to this session (it gets the next free x-id). */
+export function addExtra(key: string, slot: Omit<DuoCustomSlot, 'id'>): Promise<void> {
+  return mutate(key, (s) => {
+    const n = (s.extras ?? []).reduce((m, x) => Math.max(m, Number(x.id.slice(1)) || 0), 0) + 1;
+    s.extras = [...(s.extras ?? []), { ...slot, id: `x${n}` }];
+  });
+}
+
+export function removeExtra(key: string, id: string): Promise<void> {
+  return mutate(key, (s) => {
+    if (hasSets(s, id)) return;
+    s.extras = (s.extras ?? []).filter((x) => x.id !== id);
+    s.exercises = s.exercises.filter((e) => e.slotId !== id);
+  });
+}
+
+export function setExtraSets(key: string, id: string, sets: number): Promise<void> {
+  return mutate(key, (s) => {
+    s.extras = (s.extras ?? []).map((x) => (x.id === id ? { ...x, sets: Math.max(1, Math.min(8, sets)) } : x));
+  });
+}
+
 export function setDuoNote(key: string, note: string): Promise<void> {
   return mutate(key, (s) => {
     s.note = note || undefined;
