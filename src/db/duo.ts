@@ -216,6 +216,14 @@ export function setDuoNote(key: string, note: string): Promise<void> {
   });
 }
 
+/** Undo an accidental Finish: back to in-progress with every logged set intact. */
+export function reopenDuoSession(key: string): Promise<void> {
+  return mutate(key, (s) => {
+    s.status = 'in_progress';
+    s.endedAt = undefined;
+  });
+}
+
 /** Ends a session early or on time. A session with nothing confirmed is discarded. */
 export async function finishDuoSession(key: string): Promise<void> {
   await db.transaction('rw', db.duoSessions, async () => {

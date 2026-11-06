@@ -23,6 +23,7 @@ import {
   getTemplates,
   addExtra,
   removeExtra,
+  reopenDuoSession,
   removeSlot,
   restoreSlot,
   setExtraSets,
@@ -522,6 +523,9 @@ function SessionView({
         </SketchCard>
         {isCustom && <HitChart plan={session.customPlan ?? []} />}
         <Button onClick={onBack}>Back to the week</Button>
+        <Button variant="secondary" onClick={() => void reopenDuoSession(session.key)}>
+          Finished by mistake? Reopen this workout
+        </Button>
       </div>
     );
   }

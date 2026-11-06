@@ -374,3 +374,11 @@ describe('adding and removing exercises in a program session', () => {
     expect(LIBRARY.some((e) => e.name === 'Decline Machine Press')).toBe(true);
   });
 });
+
+describe('reopening a finished session', () => {
+  it('a reopened session keeps its sets and counts as in progress', () => {
+    const s = sess('ghaith', W1, 'mon', 2);
+    const re = { ...s, status: 'in_progress' as const, endedAt: undefined };
+    expect(sessionStats(re, false).done).toBe(sessionStats(s, false).done);
+  });
+});
