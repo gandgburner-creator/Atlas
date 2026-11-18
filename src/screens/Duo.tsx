@@ -11,6 +11,7 @@ import {
   getHousehold,
   getPrefs,
   getSeasonStart,
+  getSyncDetail,
   getSyncStatus,
   onSyncStatus,
   setHousehold,
@@ -718,10 +719,23 @@ function SyncCard() {
   const status = useSyncExternalStore(onSyncStatus, getSyncStatus);
   const [code, setCode] = useState('');
   const linked = getHousehold();
+  const { detail, lastOk } = getSyncDetail();
   return (
     <SketchCard filter="rough2" className="px-5 pt-4 pb-4">
       <span className="hand text-[24px]">sync between phones</span>
       <p className="caption mt-1">{STATUS_TEXT[status]}</p>
+      {linked && (
+        <>
+          <p className="caption mt-1">
+            Code on this phone: <span className="tnum font-semibold break-all">{linked}</span>. It must match the other phone exactly.
+          </p>
+          {detail && <p className="caption mt-1 text-[var(--accent)]">Reason: {detail}</p>}
+          {lastOk > 0 && <p className="caption mt-1">Last in sync {new Date(lastOk).toLocaleTimeString()}.</p>}
+          <button onClick={() => void startSyncIfLinked()} className="hand mt-2 mr-4 text-[17px] underline">
+            sync now
+          </button>
+        </>
+      )}
       {linked ? (
         <button
           onClick={() => {
