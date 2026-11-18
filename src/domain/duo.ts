@@ -66,7 +66,10 @@ function slot(
 }
 const alt = (name: string, mult: number, bodyweight = false): AltDef => ({ name, mult, bodyweight });
 
-export const DUO_PROGRAM: Record<DayKey, { title: string; slots: SlotDef[] }> = {
+type Program = Record<DayKey, { title: string; slots: SlotDef[] }>;
+
+/** The program as it ran up to the week of 2026-11-16. Kept so finished weeks keep their original plan and score. */
+const PROGRAM_V1: Program = {
   mon: {
     title: 'Shoulders + Abs',
     slots: [
@@ -119,16 +122,74 @@ export const DUO_PROGRAM: Record<DayKey, { title: string; slots: SlotDef[] }> = 
   },
 };
 
+/** Leg day is squat, Romanian and hip thrust; Saturday is a short machine finisher. Starts the week of this date. */
+export const PROGRAM_V2_FROM = '2026-11-16';
+
+export const DUO_PROGRAM: Program = {
+  mon: {
+    title: 'Shoulders + Abs',
+    slots: [
+      slot('mon-1', 'Seated DB Shoulder Press', 3, 6, 10, 150, 2, [alt('Machine Shoulder Press', 1), alt('Standing DB Shoulder Press', 2)]),
+      slot('mon-2', 'Lateral Raise', 4, 10, 15, 75, 2, [alt('Cable Lateral Raise', 2), alt('Machine Lateral Raise', 1)]),
+      slot('mon-3', 'Reverse Pec Deck', 3, 12, 15, 75, 1, [alt('Rear Delt Cable Fly', 2), alt('Face Pull', 1)]),
+      slot('mon-4', 'Cable Crunch', 3, 10, 15, 60, 1, [alt('Machine Crunch', 1), alt('Weighted Crunch', 1)]),
+      slot('mon-5', 'Hanging Leg Raise', 2, 10, 15, 60, 0, [alt('Reverse Crunch', 0), alt("Captain's Chair Leg Raise", 0)]),
+    ],
+  },
+  tue: {
+    title: 'Back + Biceps',
+    slots: [
+      slot('tue-1', 'Lat Pulldown', 3, 6, 10, 150, 1, [alt('Pull-up', 1, true), alt('Assisted Pull-up', 1, true)]),
+      slot('tue-2', 'Low Row', 3, 8, 10, 120, 1, [alt('Chest-Supported Row', 1), alt('One-Arm DB Row', 2)]),
+      slot('tue-3', 'Pullover', 2, 10, 15, 90, 1, [alt('Straight-Arm Pulldown', 1), alt('DB Pullover', 1)]),
+      slot('tue-4', 'Incline DB Curl', 3, 8, 12, 75, 2, [alt('Seated DB Curl', 2), alt('Cable Curl', 1)]),
+      slot('tue-5', 'Hammer Curl', 2, 10, 12, 60, 2, [alt('Cable Rope Hammer Curl', 1), alt('Cross-Body Hammer Curl', 2)]),
+    ],
+  },
+  wed: {
+    title: 'Legs: squat, Romanian, hip thrust',
+    slots: [
+      slot('wed-1', 'Squat', 4, 6, 10, 180, 1, [alt('Hack Squat', 1), alt('Smith Machine Squat', 1)], { cue: KNEE_CUE }),
+      slot('wed-2', 'Romanian Deadlift', 3, 6, 10, 150, 1, [alt('DB Romanian Deadlift', 2), alt('Good Morning', 1)]),
+      slot('wed-3', 'Hip Thrust', 3, 8, 12, 120, 1, [alt('Machine Hip Thrust', 1), alt('Glute Bridge', 1)]),
+    ],
+  },
+  thu: {
+    title: 'Chest + Triceps',
+    slots: [
+      slot('thu-1', 'Incline DB Press', 3, 6, 10, 150, 2, [alt('Incline Machine Press', 1), alt('Incline Barbell Press', 1)]),
+      slot('thu-2', 'Bench Press', 3, 6, 10, 150, 1, [alt('Machine Chest Press', 1), alt('Flat DB Press', 2)]),
+      slot('thu-3', 'Cable Fly / Pec Deck', 2, 10, 15, 75, 1, [alt('DB Fly', 2), alt('Push-up', 1, true)]),
+      slot('thu-4', 'Triceps Pressdown', 3, 10, 12, 75, 1, [alt('Rope Pressdown', 1), alt('Dip Machine', 1)]),
+      slot('thu-5', 'Overhead Cable Triceps Extension', 2, 10, 12, 60, 1, [alt('Overhead DB Triceps Extension', 1), alt('Skull Crusher', 1)]),
+    ],
+  },
+  sat: {
+    title: 'Machine finisher (optional)',
+    slots: [
+      slot('sat-1', 'Seated Leg Curl', 3, 10, 12, 60, 1, [alt('Lying Leg Curl', 1), alt('Single-Leg Curl', 1)]),
+      slot('sat-2', 'Leg Extension', 3, 10, 15, 60, 1, [alt('Single-Leg Extension', 1)]),
+      slot('sat-3', 'Hip Abduction Machine', 3, 12, 15, 60, 1, []),
+      slot('sat-4', 'Hip Adduction Machine', 3, 12, 15, 60, 1, []),
+      slot('sat-5', 'Standing Calf Raise', 3, 10, 15, 60, 1, [alt('Seated Calf Raise', 1), alt('Leg Press Calf Raise', 1)]),
+    ],
+  },
+};
+
+/** The program in force for a given week (Monday date). */
+export const programFor = (weekStart?: string): Program =>
+  weekStart && weekStart < PROGRAM_V2_FROM ? PROGRAM_V1 : DUO_PROGRAM;
+
 export function plannedSets(sets: number, deload: boolean): number {
   return deload ? Math.ceil(sets / 2) : sets;
 }
 
-export function dayPlannedSets(day: DayKey, deload: boolean): number {
-  return DUO_PROGRAM[day].slots.reduce((n, s) => n + plannedSets(s.sets, deload), 0);
+export function dayPlannedSets(day: DayKey, deload: boolean, weekStart?: string): number {
+  return programFor(weekStart)[day].slots.reduce((n, s) => n + plannedSets(s.sets, deload), 0);
 }
 
-export function weekPlannedSets(deload: boolean): number {
-  return DAY_KEYS.reduce((n, d) => n + dayPlannedSets(d, deload), 0);
+export function weekPlannedSets(deload: boolean, weekStart?: string): number {
+  return DAY_KEYS.reduce((n, d) => n + dayPlannedSets(d, deload, weekStart), 0);
 }
 
 // ── Per-profile preferences ───────────────────────────────────────────────
@@ -230,9 +291,9 @@ export const toSlot = (c: DuoCustomSlot): SlotDef => ({
 });
 
 /** The exercises a session is made of: the program's day, or the custom pick. */
-export function planOf(s: Pick<DuoSession, 'day' | 'customName' | 'customPlan'>): { title: string; slots: SlotDef[] } {
+export function planOf(s: Pick<DuoSession, 'day' | 'customName' | 'customPlan' | 'weekStart'>): { title: string; slots: SlotDef[] } {
   if (s.day === 'custom') return { title: s.customName || 'Custom workout', slots: (s.customPlan ?? []).map(toSlot) };
-  return DUO_PROGRAM[s.day];
+  return programFor(s.weekStart)[s.day];
 }
 
 export function sessionStats(s: DuoSession, deloadWeek: boolean): SessionStats {
@@ -320,7 +381,7 @@ for (const [canon, olds] of Object.entries(LEGACY_ALIASES)) {
 }
 const BW_NAMES = new Set<string>();
 for (const d of DAY_KEYS) {
-  for (const s of DUO_PROGRAM[d].slots) {
+  for (const s of [...PROGRAM_V1[d].slots, ...DUO_PROGRAM[d].slots]) {
     if (s.bodyweight) BW_NAMES.add(s.name);
     for (const a of s.alts) if (a.bodyweight) BW_NAMES.add(a.name);
   }
@@ -484,7 +545,7 @@ export function weekScore(all: DuoSession[], deload: boolean): WeekScore {
   // The week's plan, less anything dropped from a session that was started.
   const planned = DAY_KEYS.reduce((n, d) => {
     const s = sessions.find((x) => x.day === d);
-    return n + (s ? sessionStats(s, deload).planned : dayPlannedSets(d, deload));
+    return n + (s ? sessionStats(s, deload).planned : dayPlannedSets(d, deload, sessions[0]?.weekStart));
   }, 0);
   const perfect = sessionsComplete === DAY_KEYS.length;
   return {

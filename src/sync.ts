@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { collection, doc, initializeFirestore, onSnapshot, setDoc, type Firestore } from 'firebase/firestore';
-import { applyPrefs, applySharedConfig, getOwner, getPrefs, getSharedConfig, onDuoChange, type SyncStatus } from './db/duo';
+import { applyPrefs, applySharedConfig, errWhy, getOwner, getPrefs, getSharedConfig, onDuoChange, type SyncStatus } from './db/duo';
 import { db, type DuoSession, type DuoWeight, type WeightLog } from './db/schema';
 import { canon, hasConfirmedSets, mergeSession, PROFILES, type DuoPrefs, type Profile } from './domain/duo';
 
@@ -35,7 +35,7 @@ const clean = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 export async function startSync(
   code: string,
-  onStatus: (s: SyncStatus) => void,
+  onStatus: (s: SyncStatus, why?: string) => void,
 ): Promise<() => void> {
   const app = initializeApp(CONFIG, `atlas-${code}`);
   await signInAnonymously(getAuth(app));
@@ -76,8 +76,8 @@ export async function startSync(
       }
       const cfg = await getSharedConfig();
       if (cfg) await setDoc(doc(fs, `${base}/config/shared`), clean(cfg));
-    } catch {
-      onStatus('error'); // local data is untouched; the next push retries
+    } catch (e) {
+      onStatus('error', errWhy(e)); // local data is untouched; the next push retries
     }
   }
 
@@ -106,7 +106,7 @@ export async function startSync(
         }
         onStatus(snap.metadata.fromCache ? 'connecting' : 'synced');
       },
-      () => onStatus('error'),
+      (e) => onStatus('error', errWhy(e)),
     ),
   );
 

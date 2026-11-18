@@ -401,9 +401,15 @@ export const validHousehold = (c: string): boolean => /^[A-Za-z0-9_-]{12,64}$/.t
 export type SyncStatus = 'off' | 'connecting' | 'synced' | 'error';
 let status: SyncStatus = 'off';
 const statusListeners = new Set<() => void>();
+let detail = '';
+let lastOk = 0;
 export const getSyncStatus = (): SyncStatus => status;
-export function setSyncStatus(s: SyncStatus): void {
+/** Why the last attempt failed, and when it last worked: shown on the sync card. */
+export const getSyncDetail = (): { detail: string; lastOk: number } => ({ detail, lastOk });
+export function setSyncStatus(s: SyncStatus, why?: string): void {
   status = s;
+  if (s === 'synced') lastOk = Date.now();
+  detail = s === 'error' ? why ?? 'unknown' : '';
   statusListeners.forEach((cb) => cb());
 }
 export function onSyncStatus(cb: () => void): () => void {
@@ -426,7 +432,12 @@ export async function startSyncIfLinked(): Promise<void> {
   try {
     const { startSync } = await import('../sync');
     stop = await startSync(code, setSyncStatus);
-  } catch {
-    setSyncStatus('error');
+  } catch (e) {
+    setSyncStatus('error', errWhy(e));
   }
 }
+
+export const errWhy = (e: unknown): string => {
+  const x = e as { code?: string; message?: string };
+  return x?.code ?? x?.message ?? 'unknown';
+};
