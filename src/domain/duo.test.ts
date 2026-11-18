@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DuoSession, DuoSet } from '../db/schema';
 import {
-  buildHistory, buildSeason, canonicalName, dayKeyFor, dayPlannedSets, DAY_KEYS, DUO_PROGRAM,
+  buildHistory, buildSeason, canonicalName, dayKeyFor, dayPlannedSets, DAY_KEYS, DUO_PROGRAM, programFor,
   epley, isPr, lastTime, nextSeasonStart, plannedSets, resolveSlot, sessionKey, sessionStats,
   canon, lastForSlot, mergeSession, targetFor, weekPlannedSets, weekScore, weekStartFor, weekWinner, EMPTY_PREFS, type DayKey, type Profile,
 } from './duo';
@@ -14,7 +14,7 @@ const set = (weight: number, reps: number): DuoSet => ({ weight, reps, confirmed
 
 /** A session with the first `n` planned sets of every exercise confirmed. */
 function sess(p: Profile, week: string, day: DayKey, fill: number | 'all', bw = 100, deload = false): DuoSession {
-  const exercises = DUO_PROGRAM[day].slots.map((sl) => {
+  const exercises = programFor(week)[day].slots.map((sl) => {
     const planned = plannedSets(sl.sets, deload);
     const n = fill === 'all' ? planned : Math.min(planned, fill);
     return { slotId: sl.id, name: sl.name, sets: Array.from({ length: n }, () => set(50, 8)) };
@@ -29,15 +29,23 @@ const W1 = '2026-10-19'; // season 1, week 1 (Monday)
 const W2 = '2026-10-26';
 
 describe('program', () => {
-  it('is 67 working sets a week', () => {
-    expect(weekPlannedSets(false)).toBe(67);
-    expect(DAY_KEYS.map((d) => dayPlannedSets(d, false))).toEqual([15, 13, 13, 13, 13]);
+  it('weeks before the leg-day change keep the old 67-set plan', () => {
+    expect(weekPlannedSets(false, W1)).toBe(67);
+    expect(DAY_KEYS.map((d) => dayPlannedSets(d, false, W1))).toEqual([15, 13, 13, 13, 13]);
+  });
+  it('from the week of 16 Nov leg day is squat, Romanian, hip thrust; Saturday is a machine finisher', () => {
+    const W3 = '2026-11-16';
+    expect(DAY_KEYS.map((d) => dayPlannedSets(d, false, W3))).toEqual([15, 13, 10, 13, 15]);
+    expect(programFor(W3).wed.slots.map((x) => x.name)).toEqual(['Squat', 'Romanian Deadlift', 'Hip Thrust']);
+    expect(programFor(W3).sat.slots.map((x) => x.name)).toEqual([
+      'Seated Leg Curl', 'Leg Extension', 'Hip Abduction Machine', 'Hip Adduction Machine', 'Standing Calf Raise',
+    ]);
   });
   it('deload halves sets, rounded up', () => {
     expect(plannedSets(3, true)).toBe(2);
     expect(plannedSets(2, true)).toBe(1);
     expect(plannedSets(4, true)).toBe(2);
-    expect(weekPlannedSets(true)).toBe(41);
+    expect(weekPlannedSets(true, W1)).toBe(41);
   });
 });
 
@@ -206,7 +214,7 @@ describe('merging two copies of a session (sync)', () => {
     ...base,
     updatedAt,
     exercises: Object.entries(sets).map(([slotId, ss]) => ({
-      slotId, name: DUO_PROGRAM.mon.slots.find((x) => x.id === slotId)!.name,
+      slotId, name: programFor(W1).mon.slots.find((x) => x.id === slotId)!.name,
       sets: ss.map(([w, t]) => ({ weight: w, reps: 8, confirmedAt: t })),
     })),
   });

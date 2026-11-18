@@ -45,7 +45,7 @@ import {
   DAY_LABEL,
   dayKeyFor,
   dayPlannedSets,
-  DUO_PROGRAM,
+  programFor,
   EMPTY_PREFS,
   epley,
   isPr,
@@ -818,13 +818,13 @@ function TrainHome({
   const row = (d: DayKey) => {
     const s = find(d);
     const st = s ? sessionStats(s, deload) : null;
-    const planned = dayPlannedSets(d, deload);
+    const planned = dayPlannedSets(d, deload, weekStart);
     const label = !s ? 'Start' : s.status === 'in_progress' ? 'Resume' : 'View';
     return (
       <div key={d} className="flex items-center justify-between gap-3 py-2">
         <div className="min-w-0">
           <span className="hand text-[22px] leading-none">
-            {DAY_LABEL[d]}: {DUO_PROGRAM[d].title}
+            {DAY_LABEL[d]}: {programFor(weekStart)[d].title}
           </span>
           <p className="tnum caption">
             {st ? `${st.done}/${st.planned} sets${st.complete ? ' · complete' : ''}` : `${planned} sets`}
@@ -850,7 +850,7 @@ function TrainHome({
         <span className="annot">{todayKey ? 'today' : 'rest day'}</span>
         {todayKey ? (
           <>
-            <p className="hand text-[32px] leading-tight">{DUO_PROGRAM[todayKey].title}</p>
+            <p className="hand text-[32px] leading-tight">{programFor(weekStart)[todayKey].title}</p>
             <Button className="mt-3 w-full" onClick={() => (find(todayKey) ? onOpen(find(todayKey)!.key) : void start(todayKey))}>
               {find(todayKey) ? (find(todayKey)!.status === 'complete' ? 'View today' : 'Resume') : 'Start'}
             </Button>
@@ -860,7 +860,7 @@ function TrainHome({
             <p className="hand text-[30px] leading-tight">Rest, or make one up</p>
             <p className="caption mt-1">
               Any of the week's sessions can be done any day and still counts.
-              {nextUp ? ` Next up: ${DUO_PROGRAM[nextUp].title}.` : ' Every session this week is started.'}
+              {nextUp ? ` Next up: ${programFor(weekStart)[nextUp].title}.` : ' Every session this week is started.'}
             </p>
           </>
         )}
